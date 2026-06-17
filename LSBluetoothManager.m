@@ -1,8 +1,6 @@
 #import "LSBluetoothManager.h"
-
-// إعلان مسبق للفئات لتفادي تعارض الـ Signatures في المترجم الصارم دون استدعاء ملفات نظام
-@class CBCentralManager;
-@class CBPeripheralManager;
+#import <objc/runtime.h>
+#import <objc/message.h>
 
 @interface LSBluetoothManager ()
 
@@ -13,6 +11,26 @@
 @property (nonatomic, readwrite) BOOL isAdvertising;
 
 @end
+
+// 1️⃣ دالات C خارجية لتمثيل الـ Delegates (مخفية تماماً عن فحص المترجم الصارم)
+static void dynamic_centralManagerDidUpdateState(id self, SEL _cmd, id central) {
+    @try {
+        // قراءة الحالة بأمان عبر KVC لتفادي أي كاستنج مجهول
+        NSInteger state = [[central valueForKey:@"state"] integerValue];
+        NSLog(@"[LSBluetoothManager] تحديث حالة الالتقاط المركزي ديناميكياً: %ld", (long)state);
+    } @catch (NSException *exception) {
+        NSLog(@"[LSBluetoothManager] تحذير في الاستدعاء المركزي: %@", exception.reason);
+    }
+}
+
+static void dynamic_peripheralManagerDidUpdateState(id self, SEL _cmd, id peripheral) {
+    @try {
+        NSInteger state = [[peripheral valueForKey:@"state"] integerValue];
+        NSLog(@"[LSBluetoothManager] تحديث حالة البث الفرعي ديناميكياً: %ld", (long)state);
+    } @catch (NSException *exception) {
+        NSLog(@"[LSBluetoothManager] تحذير في استدعاء البث: %@", exception.reason);
+    }
+}
 
 @implementation LSBluetoothManager
 
@@ -31,20 +49,20 @@
         _isScanning = NO;
         _isAdvertising = NO;
         
+        // 2️⃣ حقن الدالات ديناميكياً في الـ Class لتخطي حماية المترجم (Clang) بنسبة 100%
+        Class cls = [self class];
+        class_addMethod(cls, NSSelectorFromString(@"centralManagerDidUpdateState:"), (IMP)dynamic_centralManagerDidUpdateState, "v@:@");
+        class_addMethod(cls, NSSelectorFromString(@"peripheralManagerDidUpdateState:"), (IMP)dynamic_peripheralManagerDidUpdateState, "v@:@");
+        
         Class CBCentralManagerClass = NSClassFromString(@"CBCentralManager");
         Class CBPeripheralManagerClass = NSClassFromString(@"CBPeripheralManager");
         
         if (CBCentralManagerClass && CBPeripheralManagerClass) {
-            #pragma clang diagnostic push
-            #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            // استدعاء محرك التخصيص عبر objc_msgSend الصافي والمتوافق كلياً مع ARC
+            id (*sendInitWithDelegate)(id, SEL, id, id) = (id (*)(id, SEL, id, id))objc_msgSend;
             
-            id allocatedCentral = [CBCentralManagerClass alloc];
-            _centralManager = [allocatedCentral performSelector:NSSelectorFromString(@"initWithDelegate:queue:") withObject:self withObject:nil];
-            
-            id allocatedPeripheral = [CBPeripheralManagerClass alloc];
-            _peripheralManager = [allocatedPeripheral performSelector:NSSelectorFromString(@"initWithDelegate:queue:") withObject:self withObject:nil];
-            
-            #pragma clang diagnostic pop
+            _centralManager = sendInitWithDelegate([CBCentralManagerClass alloc], NSSelectorFromString(@"initWithDelegate:queue:"), self, nil);
+            _peripheralManager = sendInitWithDelegate([CBPeripheralManagerClass alloc], NSSelectorFromString(@"initWithDelegate:queue:"), self, nil);
         }
     }
     return self;
@@ -56,10 +74,8 @@
         if ([self.centralManager respondsToSelector:scanSelector]) {
             NSDictionary *options = @{@"CBCentralManagerScanOptionAllowDuplicatesKey": @YES};
             
-            #pragma clang diagnostic push
-            #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-            [self.centralManager performSelector:scanSelector withObject:nil withObject:options];
-            #pragma clang diagnostic pop
+            void (*sendScan)(id, SEL, id, id) = (void (*)(id, SEL, id, id))objc_msgSend;
+            sendScan(self.centralManager, scanSelector, nil, options);
             
             self.isScanning = YES;
             NSLog(@"[LSBluetoothManager] بدأت عملية فحص البلوتوث بنجاح.");
@@ -71,10 +87,8 @@
     if (self.isScanning && self.centralManager) {
         SEL stopSelector = NSSelectorFromString(@"stopScan");
         if ([self.centralManager respondsToSelector:stopSelector]) {
-            #pragma clang diagnostic push
-            #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-            [self.centralManager performSelector:stopSelector];
-            #pragma clang diagnostic pop
+            void (*sendStop)(id, SEL) = (void (*)(id, SEL))objc_msgSend;
+            sendStop(self.centralManager, stopSelector);
             
             self.isScanning = NO;
             NSLog(@"[LSBluetoothManager] توقف الفحص.");
@@ -111,10 +125,8 @@
     
     SEL advSelector = NSSelectorFromString(@"startAdvertising:");
     if ([self.peripheralManager respondsToSelector:advSelector]) {
-        #pragma clang diagnostic push
-        #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-        [self.peripheralManager performSelector:advSelector withObject:self.advertisingData];
-        #pragma clang diagnostic pop
+        void (*sendAdv)(id, SEL, id) = (void (*)(id, SEL, id))objc_msgSend;
+        sendAdv(self.peripheralManager, advSelector, self.advertisingData);
         
         self.isAdvertising = YES;
         NSLog(@"[LSBluetoothManager] بدأ بث بيانات الموقع المزيفة.");
@@ -125,35 +137,12 @@
     if (self.isAdvertising && self.peripheralManager) {
         SEL stopSelector = NSSelectorFromString(@"stopAdvertising");
         if ([self.peripheralManager respondsToSelector:stopSelector]) {
-            #pragma clang diagnostic push
-            #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-            [self.peripheralManager performSelector:stopSelector];
-            #pragma clang diagnostic pop
+            void (*sendStopAdv)(id, SEL) = (void (*)(id, SEL))objc_msgSend;
+            sendStopAdv(self.peripheralManager, stopSelector);
             
             self.isAdvertising = NO;
             NSLog(@"[LSBluetoothManager] توقف بث البلوتوث.");
         }
-    }
-}
-
-#pragma mark - Delegate Callbacks (مطابقة تامة لمنع أخطاء المترجم الصارم)
-
-- (void)centralManagerDidUpdateState:(CBCentralManager *)central {
-    @try {
-        // تحويل الكائن برمجياً إلى id لتخطي الحماية وقراءة الحالة بأمان عبر KVC
-        NSInteger state = [[(id)central valueForKey:@"state"] integerValue];
-        NSLog(@"[LSBluetoothManager] تحديث حالة الالتقاط المركزي: %ld", (long)state);
-    } @catch (NSException *exception) {
-        NSLog(@"[LSBluetoothManager] تحذير أثناء جلب الحالة: %@", exception.reason);
-    }
-}
-
-- (void)peripheralManagerDidUpdateState:(CBPeripheralManager *)peripheral {
-    @try {
-        NSInteger state = [[(id)peripheral valueForKey:@"state"] integerValue];
-        NSLog(@"[LSBluetoothManager] تحديث حالة البث الفرعي: %ld", (long)state);
-    } @catch (NSException *exception) {
-        NSLog(@"[LSBluetoothManager] تحذير أثناء جلب الحالة: %@", exception.reason);
     }
 }
 
