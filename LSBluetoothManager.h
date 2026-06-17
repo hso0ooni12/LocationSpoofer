@@ -1,27 +1,24 @@
 #import <Foundation/Foundation.h>
 #import <CoreBluetooth/CoreBluetooth.h>
-#import <CoreLocation/CoreLocation.h>
 
-@protocol LSBluetoothManagerDelegate <NSObject>
-- (void)blueToothManagerDidUpdateDiscoveredDevices:(NSArray<NSDictionary *> *)devices;
-@end
+NS_ASSUME_NONNULL_BEGIN
 
 @interface LSBluetoothManager : NSObject
 
-+ (instancetype)sharedManager;
-@property (nonatomic, weak) id<LSBluetoothManagerDelegate> delegate;
-@property (nonatomic, readonly) BOOL isAdvertising;
-@property (nonatomic, readonly) BOOL isScanning;
-@property (nonatomic, strong, readonly) NSMutableArray<NSDictionary *> *discoveredDevices;
++ (instancetype)shared;
 
-// أساليب المسح (Scanning)
+@property (nonatomic, readonly) BOOL isScanning;
+@property (nonatomic, readonly) BOOL isAdvertising;
+
+// ميثودات التحكم في البحث والالتقاط (Central)
 - (void)startScanning;
 - (void)stopScanning;
-- (void)clearDiscoveredDevices;
 
-// أساليب التزييف (Spoofing)
-- (void)startSpoofingBeaconWithUUID:(NSString *)uuidStr major:(uint16_t)major minor:(uint16_t)minor;
-- (void)startSpoofingGenericBLEWithServiceUUID:(NSString *)serviceUUIDStr localName:(NSString *)name;
-- (void)stopSpoofing;
+// ميثودات التحكم في البث والتزوير (Peripheral)
+- (void)startAdvertisingWithData:(NSDictionary *)data;
+- (void)startAdvertisingBeaconWithUUID:(NSUUID *)uuid major:(uint16_t)major minor:(uint16_t)minor measuredPower:(nullable NSNumber *)power;
+- (void)stopAdvertising;
 
 @end
+
+NS_ASSUME_NONNULL_END
