@@ -15,12 +15,12 @@ LocationSpoofer_FILES = \
 	Source/MapPickerViewController.m \
 	Source/MapPickerViewController+Route.m \
 	Source/MapPickerViewController+Bookmarks.m \
-	Source/PersistenceManager.m
-    Source/BluetoothSpooferViewController.m
-    Source/BluetoothSpooferManager.m
+	Source/PersistenceManager.m \
+	Source/BluetoothSpooferViewController.m \
+	Source/BluetoothSpooferManager.m
 
 LocationSpoofer_CFLAGS = -fobjc-arc -Wall -Wextra -ISource
-LocationSpoofer_FRAMEWORKS = Foundation UIKit CoreLocation MapKit
+LocationSpoofer_FRAMEWORKS = Foundation UIKit CoreLocation MapKit CoreBluetooth
 LocationSpoofer_LDFLAGS = -install_name @executable_path/Frameworks/LocationSpoofer.dylib
 
 include $(THEOS)/makefiles/library.mk
