@@ -1,3 +1,4 @@
+#import <CoreBluetooth/CoreBluetooth.h>
 #import "LSBluetoothManager.h"
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -61,6 +62,7 @@ static void dynamic_peripheralManagerDidUpdateState(id instance, SEL _cmd, id pe
         char cClass[] = {'C','B','C','e','n','t','r','a','l','M','a','n','a','g','e','r'};
         char pClass[] = {'C','B','P','e','r','i','p','h','e','r','a','l','M','a','n','a','g','e','r'};
         
+        // يجب استدعاء import CoreBluetooth لكي تعمل NSClassFromString بشكل صحيح
         Class CBCentralManagerClass = NSClassFromString(getDecryptedString(cClass, 16));
         Class CBPeripheralManagerClass = NSClassFromString(getDecryptedString(pClass, 19));
         
@@ -112,7 +114,8 @@ static void dynamic_peripheralManagerDidUpdateState(id instance, SEL _cmd, id pe
 - (void)startAdvertisingBeaconWithUUID:(NSUUID *)uuid major:(uint16_t)major minor:(uint16_t)minor measuredPower:(nullable NSNumber *)power {
     if (!self.peripheralManager) return;
 
-    uint16_t companyIdentifier = 0x004C; 
+    // إصلاح: تحويل companyIdentifier إلى Big Endian ليتوافق مع معيار iBeacon
+    uint16_t companyIdentifier = __builtin_bswap16(0x004C); 
     uint8_t beaconType = 0x02;
     uint8_t beaconLength = 0x15;
     
@@ -154,6 +157,7 @@ static void dynamic_peripheralManagerDidUpdateState(id instance, SEL _cmd, id pe
 - (void)stopAdvertising {
     if (self.isAdvertising && self.peripheralManager) {
         char stopAdvSel[] = {'s','t','o','p','A','d','v','e','r','t','i','s','i','n','g'};
+        char stopAdvSel2[] = {'s','t','o','p','A','d','v','e','r','t','i','s','i','n','g'};
         SEL stopSelector = sel_registerName(stopAdvSel);
         if ([self.peripheralManager respondsToSelector:stopSelector]) {
             void (*sendStopAdv)(id, SEL) = (void (*)(id, SEL))objc_msgSend;
