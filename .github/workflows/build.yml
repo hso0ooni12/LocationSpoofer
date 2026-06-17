@@ -1,7 +1,7 @@
 name: Build iOS Tweak
 
 on:
-  workflow_dispatch: 
+  workflow_dispatch:
 
 jobs:
   build:
@@ -15,10 +15,17 @@ jobs:
       run: |
         unzip project.zip
 
-    - name: Setup Theos and iOS SDKs
+    - name: Clone Theos
       run: |
         git clone --recursive https://github.com/theos/theos.git ~/theos
-        git clone --depth 1 https://github.com/xybp888/iOS-SDKs.git ~/theos/sdks
+
+    - name: Download iOS SDKs (Fast Method)
+      run: |
+        mkdir -p ~/theos/sdks
+        curl -LO https://github.com/theos/sdks/archive/refs/heads/master.zip
+        unzip master.zip -d ~/theos/sdks
+        mv ~/theos/sdks/sdks-master/* ~/theos/sdks/
+        rm -rf master.zip ~/theos/sdks/sdks-master
 
     - name: Compile Tweak
       run: |
