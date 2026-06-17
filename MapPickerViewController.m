@@ -8,16 +8,6 @@
 #import <CoreLocation/CoreLocation.h>
 #import <MapKit/MapKit.h>
 
-// تعريف الـ Enums الأساسية لضمان عدم وجود أخطاء في التجميع (Undeclared Identifier)
-typedef NS_ENUM(NSInteger, LSMapPickerPanelTab) {
-    LSMapPickerPanelTabMap = 0,
-    LSMapPickerPanelTabBookmarks = 1
-};
-
-typedef NS_ENUM(NSInteger, LSMapPickerCoordinateMode) {
-    LSMapPickerCoordinateModeStatic = 0,
-    LSMapPickerCoordinateModeRoute = 1
-};
 
 static const CGFloat kLSCornerRadius = 16.0;
 static const CGFloat kLSHorizontalInset = 20.0;
