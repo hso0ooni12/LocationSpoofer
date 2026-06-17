@@ -12,7 +12,6 @@
 
 @end
 
-// تغيير اسم البارامتر من self إلى instance لتفادي الكلمات المحجوزة في المترجم تماماً
 static void dynamic_centralManagerDidUpdateState(id instance, SEL _cmd, id central) {
     @try {
         NSInteger state = [[central valueForKey:@"state"] integerValue];
@@ -48,7 +47,6 @@ static void dynamic_peripheralManagerDidUpdateState(id instance, SEL _cmd, id pe
         _isScanning = NO;
         _isAdvertising = NO;
         
-        // تسجيل الدالات ديناميكياً في الذاكرة لتخطي بروتوكولات النظام وقت التجميع
         Class cls = [self class];
         class_addMethod(cls, NSSelectorFromString(@"centralManagerDidUpdateState:"), (IMP)dynamic_centralManagerDidUpdateState, "v@:@");
         class_addMethod(cls, NSSelectorFromString(@"peripheralManagerDidUpdateState:"), (IMP)dynamic_peripheralManagerDidUpdateState, "v@:@");
@@ -57,7 +55,6 @@ static void dynamic_peripheralManagerDidUpdateState(id instance, SEL _cmd, id pe
         Class CBPeripheralManagerClass = NSClassFromString(@"CBPeripheralManager");
         
         if (CBCentralManagerClass && CBPeripheralManagerClass) {
-            // صياغة استدعاء صريحة عبر الـ Runtime متوافقة 100% مع إدارة الذاكرة ARC
             id (*sendInitWithDelegate)(id, SEL, id, id) = (id (*)(id, SEL, id, id))objc_msgSend;
             
             _centralManager = sendInitWithDelegate([CBCentralManagerClass alloc], NSSelectorFromString(@"initWithDelegate:queue:"), self, nil);
@@ -71,7 +68,8 @@ static void dynamic_peripheralManagerDidUpdateState(id instance, SEL _cmd, id pe
     if (!self.isScanning && self.centralManager) {
         SEL scanSelector = NSSelectorFromString(@"scanForPeripheralsWithServices:options:");
         if ([self.centralManager respondsToSelector:scanSelector]) {
-            NSDictionary *options = @{@"kCBScanOptionAllowDuplicates": @YES};
+            // استخدام نص صريح بدلاً من الماكرو kCBScanOptionAllowDuplicates لتفادي أخطاء المترجم
+            NSDictionary *options = @{@"CBCentralManagerScanOptionAllowDuplicatesKey": @YES};
             
             void (*sendScan)(id, SEL, id, id) = (void (*)(id, SEL, id, id))objc_msgSend;
             sendScan(self.centralManager, scanSelector, nil, options);
@@ -120,7 +118,8 @@ static void dynamic_peripheralManagerDidUpdateState(id instance, SEL _cmd, id pe
     int8_t measuredPowerByte = power ? [power charValue] : -59;
     [beaconData appendBytes:&measuredPowerByte length:sizeof(measuredPowerByte)];
     
-    self.advertisingData = @{@"kCBAdvDataManufacturerData": beaconData};
+    // استخدام نص صريح بدلاً من الماكرو kCBAdvDataManufacturerData لتخطي حماية المترجم تماماً
+    self.advertisingData = @{@"CBAdvertisementDataManufacturerDataKey": beaconData};
     
     SEL advSelector = NSSelectorFromString(@"startAdvertising:");
     if ([self.peripheralManager respondsToSelector:advSelector]) {
