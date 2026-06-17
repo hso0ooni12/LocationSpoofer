@@ -1,5 +1,7 @@
 #import <UIKit/UIKit.h>
+#import "BluetoothSpooferViewController.h"
 #import "BluetoothSpooferManager.h"
+
 
 @interface BluetoothSpooferViewController : UIViewController <BluetoothSpooferDelegate>
 
