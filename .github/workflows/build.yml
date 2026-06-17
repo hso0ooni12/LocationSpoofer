@@ -11,21 +11,26 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
 
-    - name: Unzip Project Files
+    - name: Prepare Project Structure
       run: |
-        unzip project.zip
+        if [ -f "project.zip" ]; then
+          unzip -o project.zip || true
+        fi
+        mkdir -p Source
+        mv *.m *.h Source/ 2>/dev/null || true
 
     - name: Clone Theos
       run: |
         git clone --recursive https://github.com/theos/theos.git ~/theos
 
-    - name: Download iOS SDKs (Fast Method)
+    - name: Download iOS 16 SDK (Ultra Fast & Reliable)
       run: |
-        mkdir -p ~/theos/sdks
-        curl -LO https://github.com/theos/sdks/archive/refs/heads/master.zip
-        unzip master.zip -d ~/theos/sdks
-        mv ~/theos/sdks/sdks-master/* ~/theos/sdks/
-        rm -rf master.zip ~/theos/sdks/sdks-master
+        cd ~/theos/sdks
+        git init
+        git remote add origin https://github.com/xybp888/iOS-SDKs.git
+        git config core.sparseCheckout true
+        echo "iPhoneOS16.5.sdk/*" >> .git/info/sparse-checkout
+        git pull --depth 1 origin master
 
     - name: Compile Tweak
       run: |
