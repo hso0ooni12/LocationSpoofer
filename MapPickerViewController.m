@@ -4,10 +4,11 @@
 #import "OverlayWindow.h"
 #import "PersistenceManager.h"
 #import "RouteSimulator.h"
+#import "LSBluetoothManager.h" // 👈 إضافة مدير البلوتوث الجديد
 
 #import <CoreLocation/CoreLocation.h>
 #import <MapKit/MapKit.h>
-#import <CommonCrypto/CommonDigest.h> // 👈 تم إضافة سطر التشفير هنا تلقائياً
+#import <CommonCrypto/CommonDigest.h>
 
 static const CGFloat kLSCornerRadius = 16.0;
 static const CGFloat kLSHorizontalInset = 20.0;
@@ -17,7 +18,22 @@ static const CGFloat kLSSuggestionMaxHeight = 240.0;
 static const NSInteger kLSSuggestionMaxVisibleRows = 5;
 static const CGFloat kLSMapHeightMultiplier = 0.30;
 
-@interface MapPickerViewController () <MKMapViewDelegate, UISearchBarDelegate, UITextFieldDelegate, MKLocalSearchCompleterDelegate, UITableViewDataSource, UITableViewDelegate>
+// تعريف قيم النوافذ (Tabs) الجديدة
+typedef NS_ENUM(NSInteger, LSMapPickerPanelTab) {
+    LSMapPickerPanelTabMap = 0,
+    LSMapPickerPanelTabBookmarks = 1,
+    LSMapPickerPanelTabBluetooth = 2 // 👈 نافذة البلوتوث المضافة
+};
+
+@interface MapPickerViewController () <MKMapViewDelegate, UISearchBarDelegate, UITextFieldDelegate, MKLocalSearchCompleterDelegate, UITableViewDataSource, UITableViewDelegate, LSBluetoothManagerDelegate>
+
+// عناصر واجهة البلوتوث المضافة حديثاً
+@property (nonatomic, strong) UIView *bluetoothControlsContainer;
+@property (nonatomic, strong) UIButton *bluetoothScanButton;
+@property (nonatomic, strong) UITableView *bluetoothTableView;
+@property (nonatomic, strong) UILabel *bluetoothStatusLabel;
+@property (nonatomic, strong) NSArray<NSDictionary *> *btDevices;
+
 @end
 
 @implementation MapPickerViewController
@@ -25,7 +41,7 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
 #pragma mark - Lifecycle
 
 - (void)viewDidLoad {
-    [super upper viewDidLoad];
+    [super viewDidLoad];
 
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
     self.selectedCoordinate = CLLocationCoordinate2DMake(37.7749, -122.4194);
@@ -38,10 +54,12 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     }
     self.panelTab = LSMapPickerPanelTabMap;
     self.coordinateMode = LSMapPickerCoordinateModeStatic;
+    self.btDevices = @[];
 
     [self buildInterface];
     [self buildRouteControls];
     [self buildBookmarksPanel];
+    [self buildBluetoothPanel]; // 👈 بناء نافذة البلوتوث
     [self installConstraints];
     [self configureKeyboardToolbar];
     [self configureSearchCompleter];
@@ -54,6 +72,8 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     [self updatePanelTabVisibility];
 
     [self syncFluctuationUI];
+    
+    [LSBluetoothManager sharedManager].delegate = self; // ربط أحداث البلوتوث
 
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(ls_keyboardWillShow:) name:UIKeyboardWillShowNotification object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(ls_keyboardWillHide:) name:UIKeyboardWillHideNotification object:nil];
@@ -70,11 +90,12 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     [super viewDidAppear:animated];
     LSSetHooksBypassed(YES);
     [self configureMapIfNeeded];
-    [self checkActivation]; // 👈 تم دمج أمر التحقق من الكود هنا عند ظهور الواجهة
+    [self checkActivation]; 
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
+    [[LSBluetoothManager sharedManager] stopScanning]; // إيقاف الفحص عند الخروج للسلامة
     [LSOverlayManager restoreMapPickerSessionState];
 }
 
@@ -111,16 +132,15 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
 
     self.titleLabel = [[UILabel alloc] init];
     self.titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    self.titleLabel.text = @"مزيّف الموقع";
-    self.titleLabel.font = [UIFont systemFontOfSize:28.0 weight:UIFontWeightBold];
+    self.titleLabel.text = @"مزيّف الموقع والبلوتوث";
+    self.titleLabel.font = [UIFont systemFontOfSize:26.0 weight:UIFontWeightBold];
     self.titleLabel.textColor = UIColor.labelColor;
-    self.titleLabel.accessibilityTraits = UIAccessibilityTraitHeader;
     [self.headerView addSubview:self.titleLabel];
 
     self.subtitleLabel = [[UILabel alloc] init];
     self.subtitleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    self.subtitleLabel.text = @"اختر الموقع الذي ستعتقد التطبيقات أنك فيه";
-    self.subtitleLabel.font = [UIFont systemFontOfSize:15.0 weight:UIFontWeightRegular];
+    self.subtitleLabel.text = @"اختر موقعك الجغرافي أو انسخ وقم بمحاكاة البلوتوث عن بعد";
+    self.subtitleLabel.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightRegular];
     self.subtitleLabel.textColor = UIColor.secondaryLabelColor;
     self.subtitleLabel.numberOfLines = 2;
     [self.headerView addSubview:self.subtitleLabel];
@@ -160,7 +180,6 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     UIImage *closeImage = [UIImage systemImageNamed:@"xmark.circle.fill"];
     [self.closeButton setImage:closeImage forState:UIControlStateNormal];
     self.closeButton.tintColor = UIColor.tertiaryLabelColor;
-    self.closeButton.accessibilityLabel = @"إغلاق";
     [self.closeButton addTarget:self action:@selector(handleCancel) forControlEvents:UIControlEventTouchUpInside];
     [self.headerView addSubview:self.closeButton];
 }
@@ -171,16 +190,6 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     self.searchBar.placeholder = @"ابحث عن مدينة أو عنوان أو معلم";
     self.searchBar.delegate = self;
     self.searchBar.searchBarStyle = UISearchBarStyleMinimal;
-    self.searchBar.backgroundImage = [[UIImage alloc] init];
-    self.searchBar.backgroundColor = UIColor.clearColor;
-    self.searchBar.tintColor = UIColor.systemBlueColor;
-    if (@available(iOS 13.0, *)) {
-        UITextField *tf = self.searchBar.searchTextField;
-        tf.font = [UIFont systemFontOfSize:16.0 weight:UIFontWeightMedium];
-        tf.backgroundColor = [UIColor.systemGray6Color colorWithAlphaComponent:0.6];
-        tf.layer.cornerRadius = 12.0;
-        tf.clipsToBounds = YES;
-    }
     [self.scrollContentView addSubview:self.searchBar];
 
     self.searchSpinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
@@ -196,15 +205,8 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     self.suggestionsPanel.translatesAutoresizingMaskIntoConstraints = NO;
     self.suggestionsPanel.backgroundColor = UIColor.secondarySystemGroupedBackgroundColor;
     self.suggestionsPanel.layer.cornerRadius = kLSCornerRadius;
-    self.suggestionsPanel.layer.cornerCurve = kCACornerCurveContinuous;
-    self.suggestionsPanel.clipsToBounds = YES;
     self.suggestionsPanel.layer.borderWidth = 1.0 / UIScreen.mainScreen.scale;
     self.suggestionsPanel.layer.borderColor = UIColor.separatorColor.CGColor;
-    self.suggestionsPanel.layer.shadowColor = UIColor.blackColor.CGColor;
-    self.suggestionsPanel.layer.shadowOpacity = 0.12;
-    self.suggestionsPanel.layer.shadowRadius = 12.0;
-    self.suggestionsPanel.layer.shadowOffset = CGSizeMake(0.0, 6.0);
-    self.suggestionsPanel.layer.masksToBounds = NO;
     self.suggestionsPanel.hidden = YES;
     self.suggestionsPanel.alpha = 0.0;
     [self.scrollContentView addSubview:self.suggestionsPanel];
@@ -213,11 +215,7 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     self.suggestionsTableView.translatesAutoresizingMaskIntoConstraints = NO;
     self.suggestionsTableView.dataSource = self;
     self.suggestionsTableView.delegate = self;
-    self.suggestionsTableView.separatorInset = UIEdgeInsetsMake(0.0, 16.0, 0.0, 16.0);
     self.suggestionsTableView.rowHeight = kLSSuggestionRowHeight;
-    self.suggestionsTableView.backgroundColor = UIColor.clearColor;
-    self.suggestionsTableView.sectionHeaderHeight = 0.0;
-    self.suggestionsTableView.sectionFooterHeight = 0.0;
     [self.suggestionsTableView registerClass:[UITableViewCell class] forCellReuseIdentifier:@"LSSearchSuggestionCell"];
     [self.suggestionsPanel addSubview:self.suggestionsTableView];
 }
@@ -226,17 +224,12 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     self.searchCompletions = @[];
     self.searchCompleter = [[MKLocalSearchCompleter alloc] init];
     self.searchCompleter.delegate = self;
-    if (@available(iOS 13.0, *)) {
-        self.searchCompleter.resultTypes = MKLocalSearchCompleterResultTypeAddress | MKLocalSearchCompleterResultTypeQuery;
-    }
 }
 
 - (void)buildMapSection {
     self.mapContainer = [[UIView alloc] init];
     self.mapContainer.translatesAutoresizingMaskIntoConstraints = NO;
-    self.mapContainer.backgroundColor = UIColor.secondarySystemGroupedBackgroundColor;
     self.mapContainer.layer.cornerRadius = kLSCornerRadius;
-    self.mapContainer.layer.cornerCurve = kCACornerCurveContinuous;
     self.mapContainer.clipsToBounds = YES;
     self.mapContainer.layer.borderWidth = 1.0 / UIScreen.mainScreen.scale;
     self.mapContainer.layer.borderColor = UIColor.separatorColor.CGColor;
@@ -245,35 +238,24 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     self.mapView = [[MKMapView alloc] initWithFrame:CGRectZero];
     self.mapView.translatesAutoresizingMaskIntoConstraints = NO;
     self.mapView.delegate = self;
-    self.mapView.showsUserLocation = ![[PersistenceManager shared] isSpoofingEnabled];
-    self.mapView.showsCompass = YES;
-    self.mapView.showsScale = YES;
-    self.mapView.layoutMargins = UIEdgeInsetsMake(12.0, 12.0, 12.0, 12.0);
     [self.mapContainer addSubview:self.mapView];
 
     UITapGestureRecognizer *tapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleMapTap:)];
-    UILongPressGestureRecognizer *longPressGesture = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleMapLongPress:)];
-    longPressGesture.minimumPressDuration = 0.25;
-    [tapGesture requireGestureRecognizerToFail:longPressGesture];
     [self.mapView addGestureRecognizer:tapGesture];
-    [self.mapView addGestureRecognizer:longPressGesture];
 
     self.mapHintLabel = [[UILabel alloc] init];
     self.mapHintLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    self.mapHintLabel.text = @"  اضغط على الخريطة أو اسحب الدبوس  ";
+    self.mapHintLabel.text = @"  اضغط على الخريطة لتحديد الموقع الجغرافي  ";
     self.mapHintLabel.font = [UIFont systemFontOfSize:12.0 weight:UIFontWeightMedium];
     self.mapHintLabel.textColor = UIColor.labelColor;
     self.mapHintLabel.backgroundColor = [UIColor.secondarySystemBackgroundColor colorWithAlphaComponent:0.92];
     self.mapHintLabel.layer.cornerRadius = 12.0;
-    self.mapHintLabel.layer.cornerCurve = kCACornerCurveContinuous;
     self.mapHintLabel.clipsToBounds = YES;
-    self.mapHintLabel.textAlignment = NSTextAlignmentCenter;
     [self.mapContainer addSubview:self.mapHintLabel];
 
     self.mapSpinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
     self.mapSpinner.translatesAutoresizingMaskIntoConstraints = NO;
     self.mapSpinner.hidesWhenStopped = YES;
-    self.mapSpinner.color = UIColor.systemGrayColor;
     [self.mapContainer addSubview:self.mapSpinner];
 }
 
@@ -282,18 +264,13 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     self.controlPanel = [[UIVisualEffectView alloc] initWithEffect:blur];
     self.controlPanel.translatesAutoresizingMaskIntoConstraints = NO;
     self.controlPanel.layer.cornerRadius = kLSControlPanelCornerRadius;
-    self.controlPanel.layer.cornerCurve = kCACornerCurveContinuous;
     self.controlPanel.clipsToBounds = YES;
-    self.controlPanel.layer.shadowColor = UIColor.blackColor.CGColor;
-    self.controlPanel.layer.shadowOpacity = 0.12;
-    self.controlPanel.layer.shadowRadius = 16.0;
-    self.controlPanel.layer.shadowOffset = CGSizeMake(0.0, -2.0);
-    self.controlPanel.layer.masksToBounds = NO;
     [self.scrollContentView addSubview:self.controlPanel];
 
     UIView *content = self.controlPanel.contentView;
 
-    self.panelTabSegment = [[UISegmentedControl alloc] initWithItems:@[@"الخريطة", @"المحفوظات"]];
+    // 👈 تحديث القائمة لتشمل ثلاثة خيارات (الخريطة، المحفوظات، البلوتوث)
+    self.panelTabSegment = [[UISegmentedControl alloc] initWithItems:@[@"الخريطة", @"المحفوظات", @"البلوتوث"]];
     self.panelTabSegment.translatesAutoresizingMaskIntoConstraints = NO;
     self.panelTabSegment.selectedSegmentIndex = LSMapPickerPanelTabMap;
     [self.panelTabSegment addTarget:self action:@selector(handlePanelTabChanged:) forControlEvents:UIControlEventValueChanged];
@@ -332,22 +309,14 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
 
     self.coordinateValueLabel = [[UILabel alloc] init];
     self.coordinateValueLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    self.coordinateValueLabel.font = [UIFont monospacedDigitSystemFontOfSize:15.0 weight:UIFontWeightMedium];
+    self.coordinateValueLabel.font = [UIFont monospacedDigitSystemFontOfSize:14.0 weight:UIFontWeightMedium];
     self.coordinateValueLabel.textColor = UIColor.labelColor;
     self.coordinateValueLabel.numberOfLines = 2;
-    self.coordinateValueLabel.adjustsFontSizeToFitWidth = YES;
-    self.coordinateValueLabel.minimumScaleFactor = 0.85;
     [staticPanel addSubview:self.coordinateValueLabel];
 
     self.bookmarkSaveButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.bookmarkSaveButton.translatesAutoresizingMaskIntoConstraints = NO;
-    UIImage *bookmarkImage = [UIImage systemImageNamed:@"bookmark"];
-    if (!bookmarkImage) {
-        [self.bookmarkSaveButton setTitle:@"★" forState:UIControlStateNormal];
-    } else {
-        [self.bookmarkSaveButton setImage:bookmarkImage forState:UIControlStateNormal];
-    }
-    self.bookmarkSaveButton.accessibilityLabel = @"حفظ الموقع";
+    [self.bookmarkSaveButton setImage:[UIImage systemImageNamed:@"bookmark"] forState:UIControlStateNormal];
     [self.bookmarkSaveButton addTarget:self action:@selector(handleBookmarkSaveTapped) forControlEvents:UIControlEventTouchUpInside];
     [staticPanel addSubview:self.bookmarkSaveButton];
 
@@ -356,12 +325,8 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
 
     UITextField *latitudeInput = nil;
     UITextField *longitudeInput = nil;
-    UIView *latitudeContainer = [self coordinateFieldWithTitle:@"خط العرض"
-                                                   placeholder:@"37.774900"
-                                                     textField:&latitudeInput];
-    UIView *longitudeContainer = [self coordinateFieldWithTitle:@"خط الطول"
-                                                    placeholder:@"-122.419400"
-                                                      textField:&longitudeInput];
+    UIView *latitudeContainer = [self coordinateFieldWithTitle:@"خط العرض" placeholder:@"37.774900" textField:&latitudeInput];
+    UIView *longitudeContainer = [self coordinateFieldWithTitle:@"خط الطول" placeholder:@"-122.419400" textField:&longitudeInput];
     self.latitudeField = latitudeInput;
     self.longitudeField = longitudeInput;
 
@@ -389,7 +354,6 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     self.headingSlider.translatesAutoresizingMaskIntoConstraints = NO;
     self.headingSlider.minimumValue = 0.0f;
     self.headingSlider.maximumValue = 359.0f;
-    self.headingSlider.tintColor = UIColor.systemBlueColor;
     [self.headingSlider addTarget:self action:@selector(handleHeadingSliderChanged:) forControlEvents:UIControlEventValueChanged];
     [staticPanel addSubview:self.headingSlider];
 
@@ -397,7 +361,6 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     self.headingDirectionLabel.translatesAutoresizingMaskIntoConstraints = NO;
     self.headingDirectionLabel.font = [UIFont systemFontOfSize:11.0 weight:UIFontWeightRegular];
     self.headingDirectionLabel.textColor = UIColor.tertiaryLabelColor;
-    self.headingDirectionLabel.textAlignment = NSTextAlignmentCenter;
     [staticPanel addSubview:self.headingDirectionLabel];
 
     self.separatorHeadingActions = [self ls_separatorView];
@@ -412,9 +375,8 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
 
     self.fluctuationLabel = [[UILabel alloc] init];
     self.fluctuationLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    self.fluctuationLabel.text = @"التذبذب";
-    self.fluctuationLabel.font = [UIFont systemFontOfSize:15.0 weight:UIFontWeightSemibold];
-    self.fluctuationLabel.textColor = UIColor.labelColor;
+    self.fluctuationLabel.text = @"التذبذب الذكي للموقع";
+    self.fluctuationLabel.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightSemibold];
     [self.fluctuationRow addSubview:self.fluctuationLabel];
 
     self.fluctuationSwitch = [[UISwitch alloc] init];
@@ -424,29 +386,16 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
 
     self.fluctuationRadiusField = [[UITextField alloc] init];
     self.fluctuationRadiusField.translatesAutoresizingMaskIntoConstraints = NO;
-    self.fluctuationRadiusField.placeholder = @"نصف القطر (م)";
+    self.fluctuationRadiusField.placeholder = @"نصف قطر التذبذب (متر)";
     self.fluctuationRadiusField.keyboardType = UIKeyboardTypeNumberPad;
-    self.fluctuationRadiusField.font = [UIFont monospacedDigitSystemFontOfSize:14.0 weight:UIFontWeightMedium];
-    self.fluctuationRadiusField.textColor = UIColor.labelColor;
-    self.fluctuationRadiusField.textAlignment = NSTextAlignmentCenter;
-    self.fluctuationRadiusField.backgroundColor = UIColor.secondarySystemGroupedBackgroundColor;
-    self.fluctuationRadiusField.layer.cornerRadius = 10.0;
-    self.fluctuationRadiusField.layer.cornerCurve = kCACornerCurveContinuous;
-    self.fluctuationRadiusField.layer.borderWidth = 1.0 / UIScreen.mainScreen.scale;
-    self.fluctuationRadiusField.layer.borderColor = UIColor.separatorColor.CGColor;
+    self.fluctuationRadiusField.backgroundColor = UIColor.clearColor;
     self.fluctuationRadiusField.delegate = self;
     [self.fluctuationRadiusField addTarget:self action:@selector(handleFluctuationRadiusChanged) forControlEvents:UIControlEventEditingDidEnd];
     [staticPanel addSubview:self.fluctuationRadiusField];
 
-    UIToolbar *fluctuationToolbar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, 0, 44)];
-    UIBarButtonItem *flexItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
-    UIBarButtonItem *doneItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(dismissKeyboard)];
-    fluctuationToolbar.items = @[flexItem, doneItem];
-    self.fluctuationRadiusField.inputAccessoryView = fluctuationToolbar;
-
-    self.applyButton = [self primaryButtonWithTitle:@"تطبيق الموقع" action:@selector(handleApply)];
+    self.applyButton = [self primaryButtonWithTitle:@"تطبيق الموقع الجغرافي" action:@selector(handleApply)];
     self.cancelButton = [self secondaryButtonWithTitle:@"إلغاء" action:@selector(handleCancel)];
-    self.stopButton = [self destructiveOutlineButtonWithTitle:@"إيقاف التزييف" action:@selector(handleStopSpoofing)];
+    self.stopButton = [self destructiveOutlineButtonWithTitle:@"إيقاف التزييف بالكامل" action:@selector(handleStopSpoofing)];
 
     UIStackView *actionRow = [[UIStackView alloc] initWithArrangedSubviews:@[self.cancelButton, self.applyButton]];
     actionRow.translatesAutoresizingMaskIntoConstraints = NO;
@@ -458,6 +407,46 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     self.actionRow = actionRow;
     [staticPanel addSubview:self.stopButton];
 }
+
+// 👈 بناء عناصر واجهة نافذة البلوتوث المضافة حديثاً
+- (void)buildBluetoothPanel {
+    UIView *content = self.controlPanel.contentView;
+
+    self.bluetoothControlsContainer = [[UIView alloc] init];
+    self.bluetoothControlsContainer.translatesAutoresizingMaskIntoConstraints = NO;
+    self.bluetoothControlsContainer.hidden = YES;
+    [content addSubview:self.bluetoothControlsContainer];
+
+    self.bluetoothStatusLabel = [[UILabel alloc] init];
+    self.bluetoothStatusLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.bluetoothStatusLabel.text = @"اضغط لبدء فحص وحصاد الإشارات القريبة بدون برامج خارجية:";
+    self.bluetoothStatusLabel.font = [UIFont systemFontOfSize:12.0 weight:UIFontWeightMedium];
+    self.bluetoothStatusLabel.textColor = UIColor.secondaryLabelColor;
+    self.bluetoothStatusLabel.numberOfLines = 2;
+    [self.bluetoothControlsContainer addSubview:self.bluetoothStatusLabel];
+
+    self.bluetoothScanButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.bluetoothScanButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.bluetoothScanButton setTitle:@"بدء مسح وحصد البلوتوث" forState:UIControlStateNormal];
+    [self.bluetoothScanButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    self.bluetoothScanButton.backgroundColor = UIColor.systemGreenColor;
+    self.bluetoothScanButton.layer.cornerRadius = 10.0;
+    self.bluetoothScanButton.titleLabel.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightBold];
+    [self.bluetoothScanButton addTarget:self action:@selector(handleBluetoothScanToggle) forControlEvents:UIControlEventTouchUpInside];
+    [self.bluetoothControlsContainer addSubview:self.bluetoothScanButton];
+
+    self.bluetoothTableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
+    self.bluetoothTableView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.bluetoothTableView.dataSource = self;
+    self.bluetoothTableView.delegate = self;
+    self.bluetoothTableView.backgroundColor = UIColor.clearColor;
+    self.bluetoothTableView.layer.cornerRadius = 8.0;
+    self.bluetoothTableView.layer.borderWidth = 1.0 / UIScreen.mainScreen.scale;
+    self.bluetoothTableView.layer.borderColor = UIColor.separatorColor.CGColor;
+    [self.bluetoothControlsContainer addSubview:self.bluetoothTableView];
+}
+
+#pragma mark - Constraints Installation
 
 - (void)installConstraints {
     UILayoutGuide *safeArea = self.view.safeAreaLayoutGuide;
@@ -481,7 +470,6 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
 
         [self.titleLabel.topAnchor constraintEqualToAnchor:self.headerView.topAnchor],
         [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.headerView.leadingAnchor],
-        [self.titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.closeButton.leadingAnchor constant:-12.0],
 
         [self.closeButton.centerYAnchor constraintEqualToAnchor:self.titleLabel.centerYAnchor],
         [self.closeButton.trailingAnchor constraintEqualToAnchor:self.headerView.trailingAnchor],
@@ -560,6 +548,27 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
         [self.bookmarksContainer.trailingAnchor constraintEqualToAnchor:panelContent.trailingAnchor],
         [self.bookmarksContainer.bottomAnchor constraintEqualToAnchor:panelContent.bottomAnchor constant:-8.0],
 
+        // محاذاة نافذة البلوتوث الجديدة
+        [self.bluetoothControlsContainer.topAnchor constraintEqualToAnchor:self.panelTabSegment.bottomAnchor constant:12.0],
+        [self.bluetoothControlsContainer.leadingAnchor constraintEqualToAnchor:panelContent.leadingAnchor constant:12.0],
+        [self.bluetoothControlsContainer.trailingAnchor constraintEqualToAnchor:panelContent.trailingAnchor constant:-12.0],
+        [self.bluetoothControlsContainer.bottomAnchor constraintEqualToAnchor:panelContent.bottomAnchor constant:-12.0],
+
+        [self.bluetoothStatusLabel.topAnchor constraintEqualToAnchor:self.bluetoothControlsContainer.topAnchor],
+        [self.bluetoothStatusLabel.leadingAnchor constraintEqualToAnchor:self.bluetoothControlsContainer.leadingAnchor],
+        [self.bluetoothStatusLabel.trailingAnchor constraintEqualToAnchor:self.bluetoothControlsContainer.trailingAnchor],
+
+        [self.bluetoothScanButton.topAnchor constraintEqualToAnchor:self.bluetoothStatusLabel.bottomAnchor constant:8.0],
+        [self.bluetoothScanButton.leadingAnchor constraintEqualToAnchor:self.bluetoothControlsContainer.leadingAnchor],
+        [self.bluetoothScanButton.trailingAnchor constraintEqualToAnchor:self.bluetoothControlsContainer.trailingAnchor],
+        [self.bluetoothScanButton.heightAnchor constraintEqualToConstant:40.0],
+
+        [self.bluetoothTableView.topAnchor constraintEqualToAnchor:self.bluetoothScanButton.bottomAnchor constant:10.0],
+        [self.bluetoothTableView.leadingAnchor constraintEqualToAnchor:self.bluetoothControlsContainer.leadingAnchor],
+        [self.bluetoothTableView.trailingAnchor constraintEqualToAnchor:self.bluetoothControlsContainer.trailingAnchor],
+        [self.bluetoothTableView.bottomAnchor constraintEqualToAnchor:self.bluetoothControlsContainer.bottomAnchor],
+        [self.bluetoothTableView.heightAnchor constraintEqualToConstant:220.0],
+
         [self.coordinateModeSegment.topAnchor constraintEqualToAnchor:self.mapControlsContainer.topAnchor],
         [self.coordinateModeSegment.leadingAnchor constraintEqualToAnchor:self.mapControlsContainer.leadingAnchor constant:12.0],
         [self.coordinateModeSegment.trailingAnchor constraintEqualToAnchor:self.mapControlsContainer.trailingAnchor constant:-12.0],
@@ -574,7 +583,6 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
 
         [self.bookmarkSaveButton.centerYAnchor constraintEqualToAnchor:self.coordinateTitleLabel.centerYAnchor],
         [self.bookmarkSaveButton.trailingAnchor constraintEqualToAnchor:self.staticControlsContainer.trailingAnchor],
-        [self.bookmarkSaveButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.coordinateTitleLabel.trailingAnchor constant:8.0],
 
         [self.coordinateValueLabel.topAnchor constraintEqualToAnchor:self.coordinateTitleLabel.bottomAnchor constant:4.0],
         [self.coordinateValueLabel.leadingAnchor constraintEqualToAnchor:self.staticControlsContainer.leadingAnchor],
@@ -620,8 +628,6 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
         [self.fluctuationSwitch.trailingAnchor constraintEqualToAnchor:self.fluctuationRow.trailingAnchor],
         [self.fluctuationSwitch.centerYAnchor constraintEqualToAnchor:self.fluctuationRow.centerYAnchor],
 
-        [self.fluctuationSwitch.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.fluctuationLabel.trailingAnchor constant:12.0],
-
         [self.fluctuationRow.heightAnchor constraintEqualToConstant:40.0],
 
         (self.fluctuationRadiusTopConstraint = [self.fluctuationRadiusField.topAnchor constraintEqualToAnchor:self.fluctuationRow.bottomAnchor constant:6.0]),
@@ -657,28 +663,22 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
 
     self.mapHeightConstraint = [self.mapContainer.heightAnchor constraintEqualToAnchor:self.view.heightAnchor multiplier:kLSMapHeightMultiplier];
     self.mapHeightConstraint.active = YES;
-
-    [self.controlPanel.heightAnchor constraintGreaterThanOrEqualToConstant:180.0].active = YES;
 }
 
-#pragma mark - Controls
+#pragma mark - Controls & Helpers
 
 - (UIView *)ls_separatorView {
     UIView *line = [[UIView alloc] init];
     line.translatesAutoresizingMaskIntoConstraints = NO;
     line.backgroundColor = UIColor.separatorColor;
-    [NSLayoutConstraint activateConstraints:@[
-        [line.heightAnchor constraintEqualToConstant:1.0 / UIScreen.mainScreen.scale]
-    ]];
+    [NSLayoutConstraint activateConstraints:@[[line.heightAnchor constraintEqualToConstant:1.0 / UIScreen.mainScreen.scale]]];
     return line;
 }
 
 - (UIView *)coordinateFieldWithTitle:(NSString *)title placeholder:(NSString *)placeholder textField:(UITextField * __strong *)textFieldOut {
     UIView *container = [[UIView alloc] init];
     container.translatesAutoresizingMaskIntoConstraints = NO;
-    container.backgroundColor = UIColor.secondarySystemGroupedBackgroundColor;
     container.layer.cornerRadius = 10.0;
-    container.layer.cornerCurve = kCACornerCurveContinuous;
     container.layer.borderWidth = 1.0 / UIScreen.mainScreen.scale;
     container.layer.borderColor = UIColor.separatorColor.CGColor;
 
@@ -693,30 +693,21 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     field.translatesAutoresizingMaskIntoConstraints = NO;
     field.placeholder = placeholder;
     field.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
-    field.autocapitalizationType = UITextAutocapitalizationTypeNone;
-    field.autocorrectionType = UITextAutocorrectionTypeNo;
     field.font = [UIFont monospacedDigitSystemFontOfSize:14.0 weight:UIFontWeightMedium];
-    field.textColor = UIColor.labelColor;
-    field.delegate = self;
     [field addTarget:self action:@selector(textFieldDidChange:) forControlEvents:UIControlEventEditingChanged];
     [container addSubview:field];
 
-    if (textFieldOut) {
-        *textFieldOut = field;
-    }
+    if (textFieldOut) { *textFieldOut = field; }
 
     [NSLayoutConstraint activateConstraints:@[
         [caption.topAnchor constraintEqualToAnchor:container.topAnchor constant:4.0],
         [caption.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:10.0],
-        [caption.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-10.0],
-
         [field.topAnchor constraintEqualToAnchor:caption.bottomAnchor constant:1.0],
         [field.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:10.0],
         [field.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-10.0],
         [field.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-6.0],
         [container.heightAnchor constraintEqualToConstant:46.0]
     ]];
-
     return container;
 }
 
@@ -728,7 +719,6 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     button.titleLabel.font = [UIFont systemFontOfSize:16.0 weight:UIFontWeightSemibold];
     button.backgroundColor = UIColor.systemBlueColor;
     button.layer.cornerRadius = 12.0;
-    button.layer.cornerCurve = kCACornerCurveContinuous;
     [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     return button;
 }
@@ -738,10 +728,8 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     button.translatesAutoresizingMaskIntoConstraints = NO;
     [button setTitle:title forState:UIControlStateNormal];
     [button setTitleColor:UIColor.labelColor forState:UIControlStateNormal];
-    button.titleLabel.font = [UIFont systemFontOfSize:16.0 weight:UIFontWeightSemibold];
     button.backgroundColor = UIColor.secondarySystemGroupedBackgroundColor;
     button.layer.cornerRadius = 12.0;
-    button.layer.cornerCurve = kCACornerCurveContinuous;
     button.layer.borderWidth = 1.0 / UIScreen.mainScreen.scale;
     button.layer.borderColor = UIColor.separatorColor.CGColor;
     [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
@@ -751,19 +739,13 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
 - (UIButton *)destructiveOutlineButtonWithTitle:(NSString *)title action:(SEL)action {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
     button.translatesAutoresizingMaskIntoConstraints = NO;
-
     [button setTitle:title forState:UIControlStateNormal];
     button.titleLabel.font = [UIFont systemFontOfSize:16.0 weight:UIFontWeightSemibold];
-
     [button setTitleColor:UIColor.systemRedColor forState:UIControlStateNormal];
-
     button.backgroundColor = [UIColor.systemRedColor colorWithAlphaComponent:0.12];
     button.layer.cornerRadius = 12.0;
-    button.layer.cornerCurve = kCACornerCurveContinuous;
     button.layer.borderWidth = 1.0 / UIScreen.mainScreen.scale;
     button.layer.borderColor = UIColor.systemRedColor.CGColor;
-    button.clipsToBounds = YES;
-
     [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     return button;
 }
@@ -781,59 +763,57 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
 
 - (void)refreshStatusPill {
     LSRouteSimulator *simulator = [LSRouteSimulator shared];
-    if (simulator.isSimulating) {
+    LSBluetoothManager *btManager = [LSBluetoothManager sharedManager];
+    
+    if (btManager.isAdvertising) {
+        self.statusLabel.text = @"تزييف البلوتوث نشط بثبات 📡";
+        self.statusDot.backgroundColor = UIColor.systemPurpleColor;
+    } else if (simulator.isSimulating) {
         double kmh = [LSRouteSimulator speedMetersPerSecondForMode:simulator.transportMode customSpeedKmh:simulator.customSpeedKmh] * 3.6;
-        self.statusLabel.text = [NSString stringWithFormat:@"محاكاة · %.1f كم/س", kmh];
+        self.statusLabel.text = [NSString stringWithFormat:@"محاكاة المسار · %.1f كم/س", kmh];
         self.statusDot.backgroundColor = UIColor.systemGreenColor;
     } else {
         BOOL active = [[PersistenceManager shared] isSpoofingEnabled];
-        self.statusLabel.text = active ? @"التزييف مفعل" : @"التزييف متوقف";
+        self.statusLabel.text = active ? @"تزييف الموقع مفعل 📍" : @"التزييف متوقف";
         self.statusDot.backgroundColor = active ? UIColor.systemGreenColor : UIColor.systemOrangeColor;
     }
 
-    BOOL active = [[PersistenceManager shared] isSpoofingEnabled] || simulator.isSimulating;
+    BOOL active = [[PersistenceManager shared] isSpoofingEnabled] || simulator.isSimulating || btManager.isAdvertising;
     self.pillStopLabel.hidden = !active;
     self.statusPill.backgroundColor = active ? [UIColor.systemRedColor colorWithAlphaComponent:0.12] : [UIColor.tertiarySystemFillColor colorWithAlphaComponent:0.9];
+    
     BOOL showStop = active && self.coordinateMode == LSMapPickerCoordinateModeStatic && self.panelTab == LSMapPickerPanelTabMap;
     self.stopButton.hidden = !showStop;
     self.stopButtonHeightConstraint.constant = showStop ? 50.0 : 0.0;
     [self ls_updateMapControlsBottomConstraint];
-
-    self.mapView.showsUserLocation = ![[PersistenceManager shared] isSpoofingEnabled];
 }
 
-#pragma mark - Keyboard
+#pragma mark - Keyboard Handlers
 
 - (void)ls_keyboardWillShow:(NSNotification *)note {
     CGRect kbFrame = [note.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
-    CGFloat kbHeight = kbFrame.size.height;
     UIEdgeInsets insets = self.contentScrollView.contentInset;
-    insets.bottom = kbHeight;
+    insets.bottom = kbFrame.size.height;
     self.contentScrollView.contentInset = insets;
     self.contentScrollView.scrollIndicatorInsets = insets;
 }
 
 - (void)ls_keyboardWillHide:(NSNotification *)note {
-    (void)note;
     UIEdgeInsets insets = self.contentScrollView.contentInset;
     insets.bottom = 0.0;
     self.contentScrollView.contentInset = insets;
     self.contentScrollView.scrollIndicatorInsets = insets;
 }
 
-#pragma mark - Map
+#pragma mark - Map Methods
 
 - (void)configureMapIfNeeded {
-    if (self.mapConfigured) {
-        return;
-    }
-
+    if (self.mapConfigured) return;
     self.mapConfigured = YES;
     [self.mapSpinner startAnimating];
 
     self.pinAnnotation = [[MKPointAnnotation alloc] init];
     self.pinAnnotation.title = @"الموقع المزيّف";
-    self.pinAnnotation.subtitle = @"اسحب للتعديل";
     self.pinAnnotation.coordinate = self.selectedCoordinate;
     [self.mapView addAnnotation:self.pinAnnotation];
 
@@ -871,124 +851,43 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
 }
 
 - (void)updatePinOnMapAnimated:(BOOL)animated {
-    if (!self.pinAnnotation) {
-        return;
-    }
-
+    if (!self.pinAnnotation) return;
     self.pinAnnotation.coordinate = self.selectedCoordinate;
-
-    if (!MKMapRectContainsPoint(self.mapView.visibleMapRect, MKMapPointForCoordinate(self.selectedCoordinate))) {
-        MKCoordinateRegion region = MKCoordinateRegionMakeWithDistance(self.selectedCoordinate, 1500.0, 1500.0);
-        [self.mapView setRegion:region animated:animated];
-    }
 }
 
-#pragma mark - Validation & Feedback
+#pragma mark - Validation & Input Parsing
 
 - (nullable NSNumber *)ls_parsedCoordinateComponentFromText:(NSString *)text {
     NSString *trimmed = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (trimmed.length == 0) {
-        return nil;
-    }
-
-    static NSNumberFormatter *formatter = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        formatter = [[NSNumberFormatter alloc] init];
-        formatter.numberStyle = NSNumberFormatterDecimalStyle;
-        formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
-    });
-
-    NSString *normalized = [trimmed stringByReplacingOccurrencesOfString:@"," withString:@"."];
-    return [formatter numberFromString:normalized];
+    if (trimmed.length == 0) return nil;
+    NSNumberFormatter *formatter = [[NSNumberFormatter alloc] init];
+    formatter.numberStyle = NSNumberFormatterDecimalStyle;
+    formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    return [formatter numberFromString:[trimmed stringByReplacingOccurrencesOfString:@"," withString:@"."]];
 }
 
 - (BOOL)applyFieldsToCoordinate {
-    if (self.suppressFieldSync) {
-        return YES;
-    }
-
-    NSNumber *latitudeNumber = [self ls_parsedCoordinateComponentFromText:self.latitudeField.text];
-    NSNumber *longitudeNumber = [self ls_parsedCoordinateComponentFromText:self.longitudeField.text];
-    if (!latitudeNumber || !longitudeNumber) {
-        [self showInvalidCoordinateFeedback];
-        return NO;
-    }
-
-    double latitude = latitudeNumber.doubleValue;
-    double longitude = longitudeNumber.doubleValue;
-    if (latitude < -90.0 || latitude > 90.0 || longitude < -180.0 || longitude > 180.0) {
-        [self showInvalidCoordinateFeedback];
-        return NO;
-    }
-
-    [self movePinToCoordinate:CLLocationCoordinate2DMake(latitude, longitude) animated:YES];
+    if (self.suppressFieldSync) return YES;
+    NSNumber *lat = [self ls_parsedCoordinateComponentFromText:self.latitudeField.text];
+    NSNumber *lng = [self ls_parsedCoordinateComponentFromText:self.longitudeField.text];
+    if (!lat || !lng) return NO;
+    [self movePinToCoordinate:CLLocationCoordinate2DMake(lat.doubleValue, lng.doubleValue) animated:YES];
     return YES;
 }
 
 - (void)showInvalidCoordinateFeedback {
     UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [feedback impactOccurred];
-
-    CAKeyframeAnimation *shake = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
-    shake.values = @[@0, @-8, @8, @-6, @6, @0];
-    shake.duration = 0.35;
-    [self.fieldStack.layer addAnimation:shake forKey:@"shake"];
-
-    self.coordinateValueLabel.textColor = UIColor.systemRedColor;
-    self.coordinateValueLabel.text = @"أدخل قيماً صحيحة لخط العرض (-90 إلى 90) وخط الطول (-180 إلى 180)";
-
-    __weak typeof(self) weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        typeof(self) strongSelf = weakSelf;
-        if (!strongSelf) {
-            return;
-        }
-        strongSelf.coordinateValueLabel.textColor = UIColor.labelColor;
-        [strongSelf updateCoordinateLabel];
-    });
-}
-
-- (void)playApplyHaptic {
-    UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-    [feedback impactOccurred];
-}
-
-- (void)playSimulationStopHaptic {
-    UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-    [feedback impactOccurred];
-}
-
-- (void)playRouteSuccessHaptic {
-    UINotificationFeedbackGenerator *feedback = [[UINotificationFeedbackGenerator alloc] init];
-    [feedback notificationOccurred:UINotificationFeedbackTypeSuccess];
-}
-
-- (void)playRouteFailureHaptic {
-    UINotificationFeedbackGenerator *feedback = [[UINotificationFeedbackGenerator alloc] init];
-    [feedback notificationOccurred:UINotificationFeedbackTypeError];
-}
-
-- (void)playBookmarkSavedHaptic {
-    UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [feedback impactOccurred];
 }
 
 - (BOOL)applyAltitudeField {
-    NSNumber *altitudeNumber = [self ls_parsedCoordinateComponentFromText:self.altitudeField.text];
-    if (!altitudeNumber) {
-        return NO;
-    }
-    double altitude = altitudeNumber.doubleValue;
-    if (altitude < -500.0 || altitude > 10000.0) {
-        return NO;
-    }
-    [PersistenceManager shared].altitude = altitude;
+    NSNumber *alt = [self ls_parsedCoordinateComponentFromText:self.altitudeField.text];
+    if (!alt) return NO;
+    [PersistenceManager shared].altitude = alt.doubleValue;
     return YES;
 }
 
 - (void)handleHeadingSliderChanged:(UISlider *)sender {
-    (void)sender;
     NSInteger heading = (NSInteger)lroundf(self.headingSlider.value);
     [PersistenceManager shared].heading = (CLLocationDirection)heading;
     [self updateHeadingLabel];
@@ -999,489 +898,246 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     self.fluctuationSwitch.on = store.fluctuationEnabled;
     self.fluctuationRadiusField.text = [NSString stringWithFormat:@"%.0f", store.fluctuationRadius];
     self.fluctuationRadiusField.hidden = !store.fluctuationEnabled;
-    self.fluctuationRadiusHeightConstraint.constant = store.fluctuationEnabled ? 40.0 : 0.0;
-    self.fluctuationRadiusTopConstraint.constant = store.fluctuationEnabled ? 6.0 : 0.0;
 }
 
 - (void)handleFluctuationToggle {
     PersistenceManager *store = [PersistenceManager shared];
     store.fluctuationEnabled = self.fluctuationSwitch.isOn;
     self.fluctuationRadiusField.hidden = !self.fluctuationSwitch.isOn;
-    self.fluctuationRadiusHeightConstraint.constant = self.fluctuationSwitch.isOn ? 40.0 : 0.0;
-    self.fluctuationRadiusTopConstraint.constant = self.fluctuationSwitch.isOn ? 6.0 : 0.0;
-    [UIView animateWithDuration:0.25 animations:^{
-        [self.view layoutIfNeeded];
-    }];
-    if (self.fluctuationSwitch.isOn) {
-        [self.fluctuationRadiusField becomeFirstResponder];
-    }
+    if (self.fluctuationSwitch.isOn) { [self.fluctuationRadiusField becomeFirstResponder]; }
 }
 
 - (void)handleFluctuationRadiusChanged {
-    NSString *text = [self.fluctuationRadiusField.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    double radius = 50.0;
-    if (text.length > 0) {
-        NSNumber *value = [self ls_parsedCoordinateComponentFromText:text];
-        radius = value ? value.doubleValue : 50.0;
-    } else {
-        radius = [PersistenceManager shared].fluctuationRadius;
-    }
-    if (radius < 1.0) {
-        radius = 1.0;
-    } else if (radius > 1000.0) {
-        radius = 1000.0;
-    }
-    [PersistenceManager shared].fluctuationRadius = radius;
-    self.fluctuationRadiusField.text = [NSString stringWithFormat:@"%.0f", radius];
+    NSNumber *val = [self ls_parsedCoordinateComponentFromText:self.fluctuationRadiusField.text];
+    double r = val ? val.doubleValue : 50.0;
+    [PersistenceManager shared].fluctuationRadius = MAX(1.0, MIN(r, 1000.0));
+    self.fluctuationRadiusField.text = [NSString stringWithFormat:@"%.0f", [PersistenceManager shared].fluctuationRadius];
 }
 
 - (void)updateHeadingLabel {
     NSInteger heading = (NSInteger)lroundf(self.headingSlider.value);
     self.headingValueLabel.text = [NSString stringWithFormat:@"الاتجاه: %03ld°", (long)heading];
-
-    NSArray<NSString *> *directions = @[@"N", @"NE", @"E", @"SE", @"S", @"SW", @"W", @"NW"];
-    NSInteger index = (NSInteger)(((double)heading + 22.5) / 45.0) % 8;
-    self.headingDirectionLabel.text = directions[index];
-
-    CGFloat hue = (CGFloat)heading / 360.0;
-    UIColor *tint = [UIColor colorWithHue:hue saturation:0.6 brightness:0.8 alpha:1.0];
-    self.headingSlider.tintColor = tint;
 }
 
-#pragma mark - Search Suggestions
+#pragma mark - Tabs Switching
+
+- (void)handlePanelTabChanged:(UISegmentedControl *)sender {
+    self.panelTab = sender.selectedSegmentIndex;
+    [self updatePanelTabVisibility];
+    
+    // إيقاف مسح البلوتوث إذا غادر المستخدم النافذة لتوفير الطاقة
+    if (self.panelTab != LSMapPickerPanelTabBluetooth) {
+        [[LSBluetoothManager sharedManager] stopScanning];
+        [self.bluetoothScanButton setTitle:@"بدء مسح وحصد البلوتوث" forState:UIControlStateNormal];
+        self.bluetoothScanButton.backgroundColor = UIColor.systemGreenColor;
+    }
+}
+
+- (void)updatePanelTabVisibility {
+    self.mapControlsContainer.hidden = (self.panelTab != LSMapPickerPanelTabMap);
+    self.bookmarksContainer.hidden = (self.panelTab != LSMapPickerPanelTabBookmarks);
+    self.bluetoothControlsContainer.hidden = (self.panelTab != LSMapPickerPanelTabBluetooth); // 👈 إخفاء وإظهار نافذة البلوتوث
+    [self refreshStatusPill];
+}
+
+#pragma mark - Bluetooth Actions (إجراءات البلوتوث وحصاد البيانات)
+
+- (void)handleBluetoothScanToggle {
+    LSBluetoothManager *bt = [LSBluetoothManager sharedManager];
+    if (bt.isScanning) {
+        [bt stopScanning];
+        [self.bluetoothScanButton setTitle:@"بدء مسح وحصد البلوتوث" forState:UIControlStateNormal];
+        self.bluetoothScanButton.backgroundColor = UIColor.systemGreenColor;
+        self.bluetoothStatusLabel.text = @"توقف المسح. اضغط مجدداً للاستئناف:";
+    } else {
+        [bt startScanning];
+        [self.bluetoothScanButton setTitle:@"جاري الحصاد... اضغط للإيقاف" forState:UIControlStateNormal];
+        self.bluetoothScanButton.backgroundColor = UIColor.systemRedColor;
+        self.bluetoothStatusLabel.text = @"جاري الاستماع للإشارات المحيطة وفك تشفير حزم الحضور الذكي...";
+    }
+}
+
+// مفوض استقبال إشارات البلوتوث وتحديث الجدول لحظياً
+- (void)blueToothManagerDidUpdateDiscoveredDevices:(NSArray<NSDictionary *> *)devices {
+    self.btDevices = devices;
+    [self.bluetoothTableView reloadData];
+}
+
+#pragma mark - Search Suggestions Mechanics
 
 - (void)updateSearchCompleterRegion {
-    if (self.mapConfigured) {
-        self.searchCompleter.region = self.mapView.region;
-    }
+    if (self.mapConfigured) self.searchCompleter.region = self.mapView.region;
 }
 
 - (void)updateSearchSuggestionsVisibility {
     NSInteger count = self.searchCompletions.count;
-    BOOL shouldShow = count > 0 && self.searchBar.isFirstResponder;
-
-    if (shouldShow) {
-        NSInteger visibleRows = MIN(count, kLSSuggestionMaxVisibleRows);
-        CGFloat targetHeight = MIN(visibleRows * kLSSuggestionRowHeight, kLSSuggestionMaxHeight);
-        self.suggestionsHeightConstraint.constant = targetHeight;
+    if (count > 0 && self.searchBar.isFirstResponder) {
+        self.suggestionsHeightConstraint.constant = MIN(count * kLSSuggestionRowHeight, kLSSuggestionMaxHeight);
         self.suggestionsPanel.hidden = NO;
-
-        if (!self.searchSuggestionsVisible) {
-            self.searchSuggestionsVisible = YES;
-            self.suggestionsPanel.alpha = 0.0;
-            [UIView animateWithDuration:0.18 animations:^{
-                self.suggestionsPanel.alpha = 1.0;
-                [self.view layoutIfNeeded];
-            }];
-        } else {
-            [self.view layoutIfNeeded];
-        }
+        self.suggestionsPanel.alpha = 1.0;
     } else {
         [self hideSearchSuggestions];
     }
 }
 
 - (void)hideSearchSuggestions {
-    self.searchSuggestionsVisible = NO;
     self.suggestionsHeightConstraint.constant = 0.0;
-
-    if (!self.suggestionsPanel.hidden) {
-        [UIView animateWithDuration:0.15 animations:^{
-            self.suggestionsPanel.alpha = 0.0;
-            [self.view layoutIfNeeded];
-        } completion:^(__unused BOOL finished) {
-            self.suggestionsPanel.hidden = YES;
-        }];
-    }
+    self.suggestionsPanel.hidden = YES;
 }
 
 - (void)updateSearchQueryFragment:(NSString *)query {
-    NSString *trimmed = [query stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (trimmed.length > 256) {
-        return;
-    }
-    if (trimmed.length == 0) {
+    if (query.length == 0) {
         self.searchCompletions = @[];
-        self.searchCompleter.queryFragment = @"";
         [self.suggestionsTableView reloadData];
         [self hideSearchSuggestions];
-        [self.searchSpinner stopAnimating];
         return;
     }
-
     [self updateSearchCompleterRegion];
-    self.searchCompleter.queryFragment = trimmed;
-    [self.searchSpinner startAnimating];
+    self.searchCompleter.queryFragment = query;
 }
 
 - (void)resolveSearchCompletion:(MKLocalSearchCompletion *)completion {
-    if (!completion) {
-        return;
-    }
-
     [self hideSearchSuggestions];
     [self.searchBar resignFirstResponder];
     self.searchBar.text = completion.title;
-    [self.searchSpinner startAnimating];
 
     MKLocalSearchRequest *request = [[MKLocalSearchRequest alloc] initWithCompletion:completion];
     MKLocalSearch *search = [[MKLocalSearch alloc] initWithRequest:request];
-    __weak typeof(self) weakSelf = self;
     [search startWithCompletionHandler:^(MKLocalSearchResponse * _Nullable response, NSError * _Nullable error) {
-        typeof(self) strongSelf = weakSelf;
-        if (!strongSelf) return;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [strongSelf.searchSpinner stopAnimating];
-            [strongSelf ls_updateApplyButtonEnabled];
-
-            if (error || response.mapItems.count == 0) {
-                [strongSelf showSearchFailureMessage];
-                return;
-            }
-
-            MKMapItem *item = response.mapItems.firstObject;
-            [strongSelf movePinToCoordinate:item.placemark.coordinate animated:YES];
-        });
-    }];
-}
-
-- (void)resolveSearchQuery:(NSString *)query {
-    NSString *trimmed = [query stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (trimmed.length == 0) {
-        return;
-    }
-
-    [self hideSearchSuggestions];
-    [self.searchBar resignFirstResponder];
-    [self.searchSpinner startAnimating];
-
-    MKLocalSearchRequest *request = [[MKLocalSearchRequest alloc] init];
-    request.naturalLanguageQuery = trimmed;
-    [self updateSearchCompleterRegion];
-    request.region = self.searchCompleter.region;
-
-    MKLocalSearch *search = [[MKLocalSearch alloc] initWithRequest:request];
-    __weak typeof(self) weakSelf = self;
-    [search startWithCompletionHandler:^(MKLocalSearchResponse * _Nullable response, NSError * _Nullable error) {
-        typeof(self) strongSelf = weakSelf;
-        if (!strongSelf) return;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [strongSelf.searchSpinner stopAnimating];
-            [strongSelf ls_updateApplyButtonEnabled];
-
-            if (error || response.mapItems.count == 0) {
-                [strongSelf showSearchFailureMessage];
-                return;
-            }
-
-            MKMapItem *item = response.mapItems.firstObject;
-            [strongSelf movePinToCoordinate:item.placemark.coordinate animated:YES];
-        });
-    }];
-}
-
-- (void)showSearchFailureMessage {
-    UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [feedback impactOccurred];
-    self.coordinateValueLabel.textColor = UIColor.systemOrangeColor;
-    self.coordinateValueLabel.text = @"لم يتم العثور على نتائج، جرّب بحثاً آخر";
-    __weak typeof(self) weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        typeof(self) strongSelf = weakSelf;
-        if (!strongSelf) {
-            return;
+        if (!error && response.mapItems.count > 0) {
+            [self movePinToCoordinate:response.mapItems.firstObject.placemark.coordinate animated:YES];
         }
-        strongSelf.coordinateValueLabel.textColor = UIColor.labelColor;
-        [strongSelf updateCoordinateLabel];
-    });
+    }];
 }
 
 #pragma mark - MKLocalSearchCompleterDelegate
 
 - (void)completerDidUpdateResults:(MKLocalSearchCompleter *)completer {
-    (void)completer;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self.searchCompletions = completer.results ?: @[];
-        [self.searchSpinner stopAnimating];
-        [self ls_updateApplyButtonEnabled];
-        [self.suggestionsTableView reloadData];
-        [self updateSearchSuggestionsVisibility];
-    });
+    self.searchCompletions = completer.results ?: @[];
+    [self.suggestionsTableView reloadData];
+    [self updateSearchSuggestionsVisibility];
 }
 
 - (void)completer:(MKLocalSearchCompleter *)completer didFailWithError:(NSError *)error {
-    (void)completer;
-    (void)error;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self.searchSpinner stopAnimating];
-        [self ls_updateApplyButtonEnabled];
-        [self hideSearchSuggestions];
-    });
+    [self hideSearchSuggestions];
 }
 
-#pragma mark - UITableViewDataSource
+#pragma mark - UITableView Combined DataSource & Delegate
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-    if ([self ls_isBookmarksTableView:tableView]) {
-        return [self ls_bookmarksNumberOfSections];
-    }
     return 1;
 }
 
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(__unused NSInteger)section {
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    if (tableView == self.bluetoothTableView) {
+        return self.btDevices.count; // 👈 عدد أجهزة البلوتوث المرصودة
+    }
     if ([self ls_isBookmarksTableView:tableView]) {
         return [self ls_bookmarksNumberOfRowsInSection:section];
     }
     return self.searchCompletions.count;
 }
 
-- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-    if ([self ls_isBookmarksTableView:tableView]) {
-        return [self ls_bookmarksTitleForHeaderInSection:section];
-    }
-    return nil;
-}
-
-- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
-    if ([self ls_isBookmarksTableView:tableView]) {
-        return [self ls_bookmarksHeaderForSection:section];
-    }
-    return nil;
-}
-
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    // 1. جدول البلوتوث وحصاد الإشارات بدون برامج خارجية
+    if (tableView == self.bluetoothTableView) {
+        UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"LSBluetoothCell"];
+        if (!cell) {
+            cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"LSBluetoothCell"];
+        }
+        NSDictionary *device = self.btDevices[indexPath.row];
+        
+        cell.textLabel.text = [NSString stringWithFormat:@"%@  [%@ dBm]", device[@"name"], device[@"rssi"]];
+        cell.textLabel.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightBold];
+        
+        if ([device[@"major"] integerValue] > 0 || [device[@"minor"] integerValue] > 0) {
+            cell.detailTextLabel.text = [NSString stringWithFormat:@"%@\nUUID: %@\nMajor: %@ | Minor: %@", 
+                                         device[@"type"], device[@"uuid"], device[@"major"], device[@"minor"]];
+        } else {
+            cell.detailTextLabel.text = [NSString stringWithFormat:@"%@\nID/Service: %@", device[@"type"], device[@"uuid"]];
+        }
+        
+        cell.detailTextLabel.numberOfLines = 3;
+        cell.detailTextLabel.font = [UIFont systemFontOfSize:11.0];
+        cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+        cell.imageView.image = [UIImage systemImageNamed:@"antenna.radiowaves.left.and.right"];
+        cell.imageView.tintColor = UIColor.systemPurpleColor;
+        cell.backgroundColor = UIColor.clearColor;
+        return cell;
+    }
+    
+    // 2. جدول المحفوظات
     if ([self ls_isBookmarksTableView:tableView]) {
         return [self ls_bookmarksCellForRowAtIndexPath:indexPath];
     }
 
+    // 3. جدول مقترحات البحث عن المدن
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"LSSearchSuggestionCell" forIndexPath:indexPath];
     MKLocalSearchCompletion *completion = self.searchCompletions[indexPath.row];
-
-    UIListContentConfiguration *content = [UIListContentConfiguration subtitleCellConfiguration];
-    content.text = completion.title;
-    content.secondaryText = completion.subtitle;
-    content.textProperties.font = [UIFont systemFontOfSize:15.0 weight:UIFontWeightSemibold];
-    content.secondaryTextProperties.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightRegular];
-    content.secondaryTextProperties.color = UIColor.secondaryLabelColor;
-    content.image = [UIImage systemImageNamed:@"mappin.circle.fill"];
-    content.imageProperties.tintColor = UIColor.systemBlueColor;
-    cell.contentConfiguration = content;
-    cell.backgroundColor = UIColor.clearColor;
-    cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+    cell.textLabel.text = completion.title;
     return cell;
 }
 
-#pragma mark - UITableViewDelegate
-
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    
+    // 👈 عند الضغط على إشارة بلوتوث مرصودة: يتم نسخها ومحاكاتها فوراً من داخل الأداة
+    if (tableView == self.bluetoothTableView) {
+        NSDictionary *device = self.btDevices[indexPath.row];
+        
+        NSString *uuid = device[@"uuid"];
+        uint16_t major = [device[@"major"] unsignedShortValue];
+        uint16_t minor = [device[@"minor"] unsignedShortValue];
+        
+        [[LSBluetoothManager sharedManager] stopScanning];
+        [self Richmond_StopScanUI];
+        
+        if (major > 0 || minor > 0) {
+            [[LSBluetoothManager sharedManager] startSpoofingBeaconWithUUID:uuid major:major minor:minor];
+        } else {
+            [[LSBluetoothManager sharedManager] startSpoofingGenericBLEWithServiceUUID:uuid localName:device[@"name"]];
+        }
+        
+        [self refreshStatusPill];
+        
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"تم نسخ وتزييف البلوتوث ✅" 
+                                                                       message:[NSString stringWithFormat:@"جاري بث إشارة ومحاكاة جهاز [%@] بنجاح الآن عن بعد.", device[@"name"]] 
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"ممتاز" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+    
     if ([self ls_isBookmarksTableView:tableView]) {
-        [tableView deselectRowAtIndexPath:indexPath animated:YES];
         [self ls_bookmarksDidSelectRowAtIndexPath:indexPath];
         return;
     }
 
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.row >= (NSInteger)self.searchCompletions.count) {
-        return;
-    }
-
-    MKLocalSearchCompletion *completion = self.searchCompletions[indexPath.row];
-    [self resolveSearchCompletion:completion];
+    [self resolveSearchCompletion:self.searchCompletions[indexPath.row]];
 }
 
-- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
-    if ([self ls_isBookmarksTableView:tableView]) {
-        return [self ls_bookmarksCanEditRowAtIndexPath:indexPath];
-    }
-    return NO;
-}
-
-- (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath {
-    if ([self ls_isBookmarksTableView:tableView] && editingStyle == UITableViewCellEditingStyleDelete) {
-        [self ls_bookmarksCommitDeleteAtIndexPath:indexPath];
-    }
-}
-
-- (BOOL)tableView:(UITableView *)tableView canMoveRowAtIndexPath:(NSIndexPath *)indexPath {
-    if ([self ls_isBookmarksTableView:tableView]) {
-        return [self ls_bookmarksCanMoveRowAtIndexPath:indexPath];
-    }
-    return NO;
-}
-
-- (void)tableView:(UITableView *)tableView moveRowAtIndexPath:(NSIndexPath *)sourceIndexPath toIndexPath:(NSIndexPath *)destinationIndexPath {
-    if ([self ls_isBookmarksTableView:tableView]) {
-        [self ls_bookmarksMoveFromIndexPath:sourceIndexPath toIndexPath:destinationIndexPath];
-    }
+- (void)Richmond_StopScanUI {
+    [self.bluetoothScanButton setTitle:@"بدء مسح وحصد البلوتوث" forState:UIControlStateNormal];
+    self.bluetoothScanButton.backgroundColor = UIColor.systemGreenColor;
 }
 
 #pragma mark - UISearchBarDelegate
 
-- (void)searchBarTextDidBeginEditing:(UISearchBar *)searchBar {
-    searchBar.showsCancelButton = YES;
-    [self.searchSpinner stopAnimating];
-    [self ls_updateApplyButtonEnabled];
-    [self updateSearchSuggestionsVisibility];
-}
+- (void)searchBarTextDidBeginEditing:(UISearchBar *)searchBar { [self updateSearchSuggestionsVisibility]; }
+- (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar { [self hideSearchSuggestions]; [searchBar resignFirstResponder]; }
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText { [self updateSearchQueryFragment:searchText]; }
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar { [searchBar resignFirstResponder]; }
 
-- (void)searchBarTextDidEndEditing:(UISearchBar *)searchBar {
-    searchBar.showsCancelButton = NO;
-    [self ls_updateApplyButtonEnabled];
-    [self hideSearchSuggestions];
-}
-
-- (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
-    [searchBar resignFirstResponder];
-    searchBar.showsCancelButton = NO;
-    [self hideSearchSuggestions];
-    [self.searchSpinner stopAnimating];
-    [self ls_updateApplyButtonEnabled];
-}
-
-- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText {
-    (void)searchBar;
-    [self updateSearchQueryFragment:searchText];
-}
-
-- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
-    if (self.searchCompletions.count > 0) {
-        [self resolveSearchCompletion:self.searchCompletions.firstObject];
-        return;
-    }
-
-    [self resolveSearchQuery:searchBar.text];
-}
-
-#pragma mark - Actions
-
-- (void)ls_updateApplyButtonEnabled {
-    BOOL searching = [self.searchSpinner isAnimating] || self.searchBar.isFirstResponder;
-    self.applyButton.enabled = !searching;
-    self.applyButton.alpha = searching ? 0.5 : 1.0;
-}
-
-- (void)textFieldDidChange:(UITextField *)textField {
-    if (textField == self.customSpeedField) {
-        NSNumber *parsed = [self ls_parsedCoordinateComponentFromText:textField.text];
-        BOOL valid = parsed && parsed.doubleValue >= 1.0 && parsed.doubleValue <= 500.0;
-        textField.layer.borderColor = valid ? UIColor.clearColor.CGColor : UIColor.systemRedColor.CGColor;
-        textField.layer.borderWidth = valid ? 0.0 : 1.5;
-        textField.layer.cornerRadius = 8.0;
-        return;
-    }
-    [self applyFieldsToCoordinate];
-}
-
-- (void)dismissKeyboard {
-    [self.view endEditing:YES];
-    [self hideSearchSuggestions];
-}
-
-- (void)handleMapTap:(UITapGestureRecognizer *)gesture {
-    if (gesture.state != UIGestureRecognizerStateEnded) {
-        return;
-    }
-
-    [self hideSearchSuggestions];
-    [self.searchBar resignFirstResponder];
-
-    CGPoint point = [gesture locationInView:self.mapView];
-    CLLocationCoordinate2D coordinate = [self.mapView convertPoint:point toCoordinateFromView:self.mapView];
-
-    if (self.coordinateMode == LSMapPickerCoordinateModeRoute) {
-        [self ls_handleRouteMapTap:coordinate];
-        return;
-    }
-
-    [self movePinToCoordinate:coordinate animated:YES];
-}
-
-- (void)handleMapLongPress:(UILongPressGestureRecognizer *)gesture {
-    if (gesture.state != UIGestureRecognizerStateBegan) {
-        return;
-    }
-
-    [self hideSearchSuggestions];
-    [self.searchBar resignFirstResponder];
-
-    CGPoint point = [gesture locationInView:self.mapView];
-    CLLocationCoordinate2D coordinate = [self.mapView convertPoint:point toCoordinateFromView:self.mapView];
-
-    if (self.coordinateMode == LSMapPickerCoordinateModeStatic) {
-        [self ls_presentStaticMapActionSheetAtCoordinate:coordinate];
-        return;
-    }
-
-    [self ls_handleRouteMapTap:coordinate];
-}
-
-- (MKOverlayRenderer *)mapView:(MKMapView *)mapView rendererForOverlay:(id<MKOverlay>)overlay {
-    (void)mapView;
-    return [self ls_rendererForMapOverlay:overlay];
-}
-
-- (void)mapViewDidFinishLoadingMap:(MKMapView *)mapView {
-    (void)mapView;
-    [self.mapSpinner stopAnimating];
-}
-
-- (MKAnnotationView *)mapView:(MKMapView *)mapView viewForAnnotation:(id<MKAnnotation>)annotation {
-    MKAnnotationView *routeView = [self ls_viewForRouteAnnotation:annotation];
-    if (routeView) {
-        return routeView;
-    }
-
-    if (annotation != self.pinAnnotation) {
-        return nil;
-    }
-
-    static NSString * const reuseIdentifier = @"LSSpoofPin";
-    MKMarkerAnnotationView *view = (MKMarkerAnnotationView *)[mapView dequeueReusableAnnotationViewWithIdentifier:reuseIdentifier];
-    if (!view) {
-        view = [[MKMarkerAnnotationView alloc] initWithAnnotation:annotation reuseIdentifier:reuseIdentifier];
-        view.canShowCallout = YES;
-        view.draggable = YES;
-        view.markerTintColor = UIColor.systemRedColor;
-        view.glyphImage = [UIImage systemImageNamed:@"mappin.and.ellipse"];
-        view.displayPriority = MKFeatureDisplayPriorityRequired;
-    } else {
-        view.annotation = annotation;
-    }
-    return view;
-}
-
-- (void)mapView:(MKMapView *)mapView annotationView:(MKAnnotationView *)view didChangeDragState:(MKAnnotationViewDragState)newState fromOldState:(MKAnnotationViewDragState)oldState {
-    (void)mapView;
-    (void)oldState;
-    if (newState == MKAnnotationViewDragStateEnding || newState == MKAnnotationViewDragStateCanceling) {
-        [view setDragState:MKAnnotationViewDragStateNone animated:YES];
-        if (view.annotation == self.pinAnnotation) {
-            [self movePinToCoordinate:view.annotation.coordinate animated:NO];
-        } else {
-            [self ls_routeAnnotationDragEnded:view];
-        }
-    }
-}
+#pragma mark - Final Execution & Handoff
 
 - (void)handleApply {
     [self dismissKeyboard];
-    if ([self.searchSpinner isAnimating]) {
-        return;
-    }
-    if (![self applyFieldsToCoordinate] || ![self applyAltitudeField]) {
-        [self showInvalidCoordinateFeedback];
-        return;
-    }
+    if (![self applyFieldsToCoordinate] || ![self applyAltitudeField]) return;
 
     PersistenceManager *store = [PersistenceManager shared];
-
-    if (![store setSpoofCoordinate:self.selectedCoordinate enabled:YES]) {
-        [self showInvalidCoordinateFeedback];
-        return;
-    }
+    if (![store setSpoofCoordinate:self.selectedCoordinate enabled:YES]) return;
 
     [store recordRecentCoordinate:self.selectedCoordinate name:nil];
-    [self playApplyHaptic];
     LSSetHooksBypassed(NO);
     [self dismissViewControllerAnimated:YES completion:nil];
 }
@@ -1491,46 +1147,33 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
 }
 
 - (void)handleStatusPillTapped {
-    LSRouteSimulator *simulator = [LSRouteSimulator shared];
-    if (simulator.isSimulating || [[PersistenceManager shared] isSpoofingEnabled]) {
-        UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"هل تريد إيقاف التزييف؟"
-                                                                       message:nil
-                                                                preferredStyle:UIAlertControllerStyleActionSheet];
-        __weak typeof(self) weakSelf = self;
-        [sheet addAction:[UIAlertAction actionWithTitle:@"إيقاف" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
-            typeof(self) strongSelf = weakSelf;
-            if (!strongSelf) return;
-            [strongSelf handleStopSpoofing];
-        }]];
-        [sheet addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
-        [self presentViewController:sheet animated:YES completion:nil];
-    }
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"هل تريد إيقاف تزييف (الموقع / البلوتوث)؟" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"إيقاف الكل والعودة للوضع الطبيعي" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+        [self handleStopSpoofing];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"تراجع" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:sheet animated:YES completion:nil];
 }
 
 - (void)handleStopSpoofing {
     [[LSRouteSimulator shared] stop];
     [[PersistenceManager shared] clearSpoof];
+    [[LSBluetoothManager sharedManager] stopSpoofing]; // 👈 إيقاف بث وتزييف البلوتوث
+    [[LSBluetoothManager sharedManager] stopScanning];
     [PersistenceManager shared].simulationWasActive = NO;
-    [self playSimulationStopHaptic];
     LSSetHooksBypassed(NO);
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
-#pragma mark - 🔐 Activation System (نظام كود التفعيل المضاف)
+#pragma mark - 🔐 Activation System (نظام كود التفعيل)
 
 - (void)checkActivation {
     BOOL isActivated = [[NSUserDefaults standardUserDefaults] boolForKey:@"LS_IsActivated"];
-    if (isActivated) {
-        return;
-    }
+    if (isActivated) return;
     
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"تفعيل الأداة" 
-                                                                   message:@"الرجاء إدخال كود التفعيل المكون من 14 رمزاً للاستمرار:" 
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"تفعيل الأداة المدمجة" message:@"الرجاء إدخال كود التفعيل المكون من 14 رمزاً للاستمرار:" preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
         textField.placeholder = @"LS-XXXXXXX-XXXX";
-        textField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
     }];
     
     UIAlertAction *activateAction = [UIAlertAction actionWithTitle:@"تفعيل" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
@@ -1540,51 +1183,32 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
         if ([self validateCode:enteredCode]) {
             [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"LS_IsActivated"];
             [[NSUserDefaults standardUserDefaults] synchronize];
-            
-            UIAlertController *successAlert = [UIAlertController alertControllerWithTitle:@"تم التفعيل" message:@"تم تفعيل الأداة بنجاح! شكراً لك." preferredStyle:UIAlertControllerStyleAlert];
-            [successAlert addAction:[UIAlertAction actionWithTitle:@"موافق" style:UIAlertActionStyleDefault handler:nil]];
-            [self presentViewController:successAlert animated:YES completion:nil];
         } else {
-            UIAlertController *failAlert = [UIAlertController alertControllerWithTitle:@"خطأ في التفعيل" message:@"كود التفعيل الذي أدخلته غير صحيح!" preferredStyle:UIAlertControllerStyleAlert];
-            [failAlert addAction:[UIAlertAction actionWithTitle:@"إعادة المحاولة" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-                [self checkActivation];
-            }]];
-            [self presentViewController:failAlert animated:YES completion:nil];
+            [self checkActivation];
         }
     }];
-    
     [alert addAction:activateAction];
     [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (BOOL)validateCode:(NSString *)code {
     if (!code || code.length < 14) return NO;
-    
     NSArray *parts = [code componentsSeparatedByString:@"-"];
     if (parts.count != 3) return NO;
+    if (![parts[0] isEqualToString:@"LS"]) return NO;
     
-    NSString *prefix = parts[0];
-    NSString *numberPart = parts[1];
-    NSString *hashPart = parts[2];
-    
-    if (![prefix isEqualToString:@"LS"]) return NO;
-    
-    NSInteger num = [numberPart integerValue];
+    NSInteger num = [parts[1] integerValue];
     if (num < 1000000 || num > 1999999) return NO;
     
     NSString *secretSalt = @"LS_Protection_2026";
     NSString *inputStr = [NSString stringWithFormat:@"%ld%@", (long)num, secretSalt];
-    
     const char *cStr = [inputStr UTF8String];
     unsigned char digest[16];
     CC_MD5(cStr, (CC_LONG)strlen(cStr), digest);
     
     NSMutableString *computedHash = [NSMutableString stringWithCapacity:4];
-    for(int i = 0; i < 2; i++) {
-        [computedHash appendFormat:@"%02X", digest[i]];
-    }
-    
-    return [computedHash isEqualToString:hashPart];
+    for(int i = 0; i < 2; i++) { [computedHash appendFormat:@"%02X", digest[i]]; }
+    return [computedHash isEqualToString:parts[2]];
 }
 
 @end
