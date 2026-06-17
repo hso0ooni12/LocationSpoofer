@@ -16,6 +16,8 @@ LocationSpoofer_FILES = \
 	Source/MapPickerViewController+Route.m \
 	Source/MapPickerViewController+Bookmarks.m \
 	Source/PersistenceManager.m
+    Source/BluetoothSpooferViewController.m
+    Source/BluetoothSpooferManager.m
 
 LocationSpoofer_CFLAGS = -fobjc-arc -Wall -Wextra -ISource
 LocationSpoofer_FRAMEWORKS = Foundation UIKit CoreLocation MapKit
