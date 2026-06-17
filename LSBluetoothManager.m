@@ -1,5 +1,6 @@
 #import "LSBluetoothManager.h"
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 @interface LSBluetoothManager ()
 
@@ -28,13 +29,15 @@
         _isScanning = NO;
         _isAdvertising = NO;
         
-        // استدعاء الفئات ديناميكياً لتجنب أخطاء الـ SDK أثناء التجميع
         Class CBCentralManagerClass = NSClassFromString(@"CBCentralManager");
         Class CBPeripheralManagerClass = NSClassFromString(@"CBPeripheralManager");
         
         if (CBCentralManagerClass && CBPeripheralManagerClass) {
-            _centralManager = [[CBCentralManagerClass alloc] performSelector:NSSelectorFromString(@"initWithDelegate:queue:") withObject:self withObject:nil];
-            _peripheralManager = [[CBPeripheralManagerClass alloc] performSelector:NSSelectorFromString(@"initWithDelegate:queue:") withObject:self withObject:nil];
+            // استخدام صب دالة objc_msgSend لمنع كافة مشاكل مؤشرات الـ ARC
+            id (*initFunc)(id, SEL, id, id) = (id (*)(id, SEL, id, id))objc_msgSend;
+            
+            _centralManager = initFunc([CBCentralManagerClass alloc], NSSelectorFromString(@"initWithDelegate:queue:"), self, nil);
+            _peripheralManager = initFunc([CBPeripheralManagerClass alloc], NSSelectorFromString(@"initWithDelegate:queue:"), self, nil);
         }
     }
     return self;
@@ -43,36 +46,26 @@
 - (void)startScanning {
     if (!self.isScanning && self.centralManager) {
         SEL scanSelector = NSSelectorFromString(@"scanForPeripheralsWithServices:options:");
-        if ([self.centralManager respondsToSelector:scanSelector]) {
-            // معايير البحث الافتراضية
-            NSDictionary *options = @{@"CBCentralManagerScanOptionAllowDuplicatesKey": @YES};
-            NSMethodSignature *signature = [self.centralManager methodSignatureForSelector:scanSelector];
-            NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:signature];
-            [invocation setTarget:self.centralManager];
-            [invocation setSelector:scanSelector];
-            id argument1 = nil; // البحث عن كل الخدمات
-            id argument2 = options;
-            [invocation setArgument:&argument1 atIndex:2];
-            [invocation setArgument:&argument2 atIndex:3];
-            [invocation invoke];
-            
-            self.isScanning = YES;
-            NSLog(@"[LSBluetoothManager] بدأت عملية الفحص بنجاح.");
-        }
+        
+        // المفاتيح النصية الفعلية للنظام لضمان التوافق التام دون استدعاء مكتبات خارجية
+        NSDictionary *options = @{@"kCBScanOptionAllowDuplicates": @YES};
+        
+        void (*scanFunc)(id, SEL, id, id) = (void (*)(id, SEL, id, id))objc_msgSend;
+        scanFunc(self.centralManager, scanSelector, nil, options);
+        
+        self.isScanning = YES;
+        NSLog(@"[LSBluetoothManager] بدأت عملية الفحص بنجاح.");
     }
 }
 
 - (void)stopScanning {
     if (self.isScanning && self.centralManager) {
         SEL stopSelector = NSSelectorFromString(@"stopScan");
-        if ([self.centralManager respondsToSelector:stopSelector]) {
-            #pragma clang diagnostic push
-            #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-            [self.centralManager performSelector:stopSelector];
-            #pragma clang diagnostic pop
-            self.isScanning = NO;
-            NSLog(@"[LSBluetoothManager] توقف الفحص.");
-        }
+        void (*stopScanFunc)(id, SEL) = (void (*)(id, SEL))objc_msgSend;
+        stopScanFunc(self.centralManager, stopSelector);
+        
+        self.isScanning = NO;
+        NSLog(@"[LSBluetoothManager] توقف الفحص.");
     }
 }
 
@@ -101,35 +94,29 @@
     int8_t measuredPowerByte = power ? [power charValue] : -59;
     [beaconData appendBytes:&measuredPowerByte length:sizeof(measuredPowerByte)];
     
-    // مفتاح بث البيانات المخصصة للأجهزة المصنعة
-    self.advertisingData = @{@"CBAdvertisementDataManufacturerDataKey": beaconData};
+    // kCBAdvDataManufacturerData هو المفتاح الداخلي الفعلي لبيانات البث
+    self.advertisingData = @{@"kCBAdvDataManufacturerData": beaconData};
     
     SEL advSelector = NSSelectorFromString(@"startAdvertising:");
-    if ([self.peripheralManager respondsToSelector:advSelector]) {
-        #pragma clang diagnostic push
-        #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-        [self.peripheralManager performSelector:advSelector withObject:self.advertisingData];
-        #pragma clang diagnostic pop
-        self.isAdvertising = YES;
-        NSLog(@"[LSBluetoothManager] بدأ بث الإشارة التزويرية.");
-    }
+    void (*advFunc)(id, SEL, id) = (void (*)(id, SEL, id))objc_msgSend;
+    advFunc(self.peripheralManager, advSelector, self.advertisingData);
+    
+    self.isAdvertising = YES;
+    NSLog(@"[LSBluetoothManager] بدأ بث الإشارة التزويرية.");
 }
 
 - (void)stopAdvertising {
     if (self.isAdvertising && self.peripheralManager) {
         SEL stopSelector = NSSelectorFromString(@"stopAdvertising");
-        if ([self.peripheralManager respondsToSelector:stopSelector]) {
-            #pragma clang diagnostic push
-            #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-            [self.peripheralManager performSelector:stopSelector];
-            #pragma clang diagnostic pop
-            self.isAdvertising = NO;
-            NSLog(@"[LSBluetoothManager] توقف البث.");
-        }
+        void (*stopAdvFunc)(id, SEL) = (void (*)(id, SEL))objc_msgSend;
+        stopAdvFunc(self.peripheralManager, stopSelector);
+        
+        self.isAdvertising = NO;
+        NSLog(@"[LSBluetoothManager] توقف البث.");
     }
 }
 
-// الـ Delegates الافتراضية للـ Runtime
+// الـ Delegates لتجنب أي تحذيرات أثناء التشغيل
 - (void)centralManagerDidUpdateState:(id)central {}
 - (void)peripheralManagerDidUpdateState:(id)peripheral {}
 
