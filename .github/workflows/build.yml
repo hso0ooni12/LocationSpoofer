@@ -1,0 +1,32 @@
+name: Build iOS Tweak
+
+on:
+  workflow_dispatch: 
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Unzip Project Files
+      run: |
+        unzip project.zip
+
+    - name: Setup Theos and iOS SDKs
+      run: |
+        git clone --recursive https://github.com/theos/theos.git ~/theos
+        git clone --depth 1 https://github.com/xybp888/iOS-SDKs.git ~/theos/sdks
+
+    - name: Compile Tweak
+      run: |
+        export THEOS=~/theos
+        make FINALPACKAGE=1
+
+    - name: Upload dylib Product
+      uses: actions/upload-artifact@v4
+      with:
+        name: LocationSpoofer-dylib
+        path: .theos/obj/LocationSpoofer.dylib
