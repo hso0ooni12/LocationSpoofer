@@ -7,6 +7,12 @@
 
 #import <CoreLocation/CoreLocation.h>
 #import <MapKit/MapKit.h>
+#import "BluetoothSpooferViewController.h"
+
+// داخل حدث الضغط على الزر (Action)
+BluetoothSpooferViewController *bluetoothVC = [[BluetoothSpooferViewController alloc] init];
+[self.navigationController pushViewController:bluetoothVC animated:YES];
+
 
 static const CGFloat kLSCornerRadius = 16.0;
 static const CGFloat kLSHorizontalInset = 20.0;
