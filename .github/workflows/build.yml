@@ -32,6 +32,10 @@ jobs:
         echo "iPhoneOS16.5.sdk/*" >> .git/info/sparse-checkout
         git pull --depth 1 origin master
 
+    - name: Install ldid (Signing Tool)
+      run: |
+        brew install ldid
+
     - name: Compile Tweak
       run: |
         export THEOS=~/theos
