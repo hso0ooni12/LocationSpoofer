@@ -1,190 +1,162 @@
 #import "LSBluetoothManager.h"
 
-@interface LSBluetoothManager () <CBPeripheralManagerDelegate, CBCentralManagerDelegate>
+@interface LSBluetoothManager () <CBCentralManagerDelegate, CBPeripheralManagerDelegate>
 
-@property (nonatomic, strong) CBPeripheralManager *peripheralManager;
+// المدير المسؤول عن البحث والتقاط الأجهزة المحيطة (Central)
 @property (nonatomic, strong) CBCentralManager *centralManager;
+
+// المدير المسؤول عن إعادة بث الإشارات المزيفة (Peripheral)
+@property (nonatomic, strong) CBPeripheralManager *peripheralManager;
+
 @property (nonatomic, strong) NSDictionary *advertisingData;
-@property (nonatomic, readwrite) BOOL isAdvertising;
 @property (nonatomic, readwrite) BOOL isScanning;
-@property (nonatomic, strong, readwrite) NSMutableArray<NSDictionary *> *discoveredDevices;
+@property (nonatomic, readwrite) BOOL isAdvertising;
 
 @end
 
 @implementation LSBluetoothManager
 
-+ (instancetype)sharedManager {
-    static LSBluetoothManager *shared = nil;
++ (instancetype)shared {
+    static LSBluetoothManager *sharedInstance = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        shared = [[LSBluetoothManager alloc] init];
+        sharedInstance = [[self alloc] init];
     });
-    return shared;
+    return sharedInstance;
 }
 
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _discoveredDevices = [[NSMutableArray alloc] init];
-        _isAdvertising = NO;
+        // تهيئة كلا المديرين للعمل بالتوازي (الالتقاط والبث)
+        _centralManager = [[CBCentralManager alloc] initWithDelegate:self queue:nil];
+        _peripheralManager = [[CBPeripheralManager alloc] initWithDelegate:self queue:nil];
         _isScanning = NO;
+        _isAdvertising = NO;
     }
     return self;
 }
 
-#pragma mark - Scanning Logic (البحث والنسخ)
+#pragma mark - Scanning Logic (Central)
 
 - (void)startScanning {
-    if (!self.centralManager) {
-        self.centralManager = [[CBCentralManager alloc] initWithDelegate:self queue:nil options:nil];
-    }
-    self.isScanning = YES;
-    [self.discoveredDevices removeAllObjects];
-    if (self.centralManager.state == CBManagerStatePoweredOn) {
-        // فحص كافة الأجهزة القريبة بدون فلترة لالتقاط كل شيء
-        [self.centralManager scanForPeripheralsWithServices:nil options:@{CBCentralManagerScanOptionAllowDuplicatesKey: @NO}];
+    if (self.centralManager.state == CBManagerStatePoweredOn && !self.isScanning) {
+        // البحث عن جميع أجهزة BLE المحيطة والسماح بالتكرار لالتقاط تحديثات الـ RSSI المستمرة
+        [self.centralManager scanForPeripheralsWithServices:nil options:@{CBCentralManagerScanOptionAllowDuplicatesKey: @YES}];
+        self.isScanning = YES;
+        NSLog(@"[LSBluetoothManager] بدأت عملية فحص والتقاط إشارات BLE المحيطة...");
     }
 }
 
 - (void)stopScanning {
-    if (self.centralManager) {
+    if (self.isScanning) {
         [self.centralManager stopScan];
-    }
-    self.isScanning = NO;
-}
-
-- (void)clearDiscoveredDevices {
-    [self.discoveredDevices removeAllObjects];
-    if (self.delegate && [self.delegate respondsToSelector:@selector(blueToothManagerDidUpdateDiscoveredDevices:)]) {
-        [self.delegate blueToothManagerDidUpdateDiscoveredDevices:self.discoveredDevices];
+        self.isScanning = NO;
+        NSLog(@"[LSBluetoothManager] توقفت عملية الفحص.");
     }
 }
 
-#pragma mark - CBCentralManagerDelegate
+#pragma mark - Advertising Logic (Peripheral)
+
+- (void)startAdvertisingWithData:(NSDictionary *)data {
+    self.advertisingData = data;
+    if (self.peripheralManager.state == CBManagerStatePoweredOn) {
+        [self.peripheralManager startAdvertising:self.advertisingData];
+        self.isAdvertising = YES;
+        NSLog(@"[LSBluetoothManager] بدأ بث بيانات البلوتوث المخصصة...");
+    }
+}
+
+// بناء حزمة بيانات iBeacon برمجياً لإعادة بثها وتزويرها (Spoofing)
+- (void)startAdvertisingBeaconWithUUID:(NSUUID *)uuid major:(uint16_t)major minor:(uint16_t)minor measuredPower:(nullable NSNumber *)power {
+    
+    uint16_t companyIdentifier = 0x004C; // معرف شركة Apple لانتحال بروتوكول iBeacon
+    uint8_t beaconType = 0x02;
+    uint8_t beaconLength = 0x15;
+    
+    NSMutableData *beaconData = [NSMutableData data];
+    
+    // تركيب الهيكل البنائي الافتراضي لحزمة الـ Beacon
+    [beaconData appendBytes:&companyIdentifier length:sizeof(companyIdentifier)];
+    [beaconData appendBytes:&beaconType length:sizeof(beaconType)];
+    [beaconData appendBytes:&beaconLength length:sizeof(beaconLength)];
+    
+    // تحويل الـ UUID إلى Bytes وإضافته للحزمة
+    uuid_t uuidBytes;
+    [uuid getUUIDBytes:uuidBytes];
+    [beaconData appendBytes:uuidBytes length:sizeof(uuidBytes)];
+    
+    // تحويل الـ Major والـ Minor إلى Big Endian ليتوافق مع بث الشبكات
+    uint16_t majorBigEndian = CFSwapInt16HostToBig(major);
+    [beaconData appendBytes:&majorBigEndian length:sizeof(majorBigEndian)];
+    
+    uint16_t minorBigEndian = CFSwapInt16HostToBig(minor);
+    [beaconData appendBytes:&minorBigEndian length:sizeof(minorBigEndian)];
+    
+    // تحديد قوة الإشارة المقاسة (Measured Power) عند مسافة 1 متر
+    int8_t measuredPowerByte = power ? [power charValue] : -59;
+    [beaconData appendBytes:&measuredPowerByte length:sizeof(measuredPowerByte)];
+    
+    NSDictionary *advertisementDict = @{
+        CBAdvertisementDataManufacturerDataKey: beaconData
+    };
+    
+    [self startAdvertisingWithData:advertisementDict];
+}
+
+- (void)stopAdvertising {
+    if (self.isAdvertising) {
+        [self.peripheralManager stopAdvertising];
+        self.isAdvertising = NO;
+        NSLog(@"[LSBluetoothManager] توقف بث الإشارات المزيفة.");
+    }
+}
+
+#pragma mark - CBCentralManagerDelegate (التقاط وتحليل الإشارات)
 
 - (void)centralManagerDidUpdateState:(CBCentralManager *)central {
-    if (central.state == CBManagerStatePoweredOn && self.isScanning) {
-        [self.centralManager scanForPeripheralsWithServices:nil options:@{CBCentralManagerScanOptionAllowDuplicatesKey: @NO}];
+    if (central.state == CBManagerStatePoweredOn) {
+        NSLog(@"[LSBluetoothManager] نظام الالتقاط (Central) جاهز ومفعل.");
+        if (self.isScanning) {
+            [self.centralManager scanForPeripheralsWithServices:nil options:nil];
+        }
+    } else {
+        self.isScanning = NO;
+        NSLog(@"[LSBluetoothManager] نظام الالتقاط غير متاح حالياً: %ld", (long)central.state);
     }
 }
 
 - (void)centralManager:(CBCentralManager *)central didDiscoverPeripheral:(CBPeripheral *)peripheral advertisementData:(NSDictionary<NSString *,id> *)advertisementData RSSI:(NSNumber *)RSSI {
     
-    NSString *deviceName = advertisementData[CBAdvertisingDataLocalNameKey] ?: peripheral.name ?: @"جهاز غير معروف";
-    NSString *type = @"BLE Generic";
-    NSString *uuidString = @"";
-    uint16_t major = 0;
-    uint16_t minor = 0;
-    
-    // 💡 فك تشفير حزمة iBeacon إذا كان الجهاز عبارة عن بيكون (وهو المستخدم في البصمات الذكية)
-    NSData *manufacturerData = advertisementData[CBAdvertisingDataManufacturerDataKey];
+    // استخراج بيانات الشركة المصنعة لفحص ما إذا كانت إشارة iBeacon ليتم حفظها وتزويرها
+    NSData *manufacturerData = advertisementData[CBAdvertisementDataManufacturerDataKey];
     if (manufacturerData && manufacturerData.length >= 25) {
-        const uint8_t *bytes = manufacturerData.bytes;
-        // التحقق من معرف شركة آبل وحزمة البيكون المعيارية (0x4C 0x00 0x02 0x15)
-        if (bytes[0] == 0x4C && bytes[1] == 0x00 && bytes[2] == 0x02 && bytes[3] == 0x15) {
-            type = @"iBeacon (بصمة ذكية)";
-            
-            // استخراج الـ UUID (16 بايت)
-            NSUUID *beaconUUID = [[NSUUID alloc] initWithUUIDBytes:&bytes[4]];
-            uuidString = beaconUUID.UUIDString;
-            
-            // استخراج الـ Major (2 بايت)
-            major = (bytes[20] << 8) | bytes[21];
-            
-            // استخراج الـ Minor (2 بايت)
-            minor = (bytes[22] << 8) | bytes[23];
-        }
-    }
-    
-    // إذا لم يكن iBeacon، نحاول استخراج الـ Service UUIDs العادية للـ BLE
-    if ([uuidString isEqualToString:@""]) {
-        NSArray *services = advertisementData[CBAdvertisingDataServiceUUIDsKey];
-        if (services.count > 0) {
-            CBUUID *firstService = services.firstObject;
-            uuidString = firstService.UUIDString;
-        } else {
-            uuidString = peripheral.identifier.UUIDString; // كخيار بديل
-        }
-    }
-    
-    // التحقق من عدم تكرار الجهاز وتحديث بياناته
-    BOOL exists = NO;
-    for (NSMutableDictionary *device in self.discoveredDevices) {
-        if ([device[@"identifier"] isEqualToString:peripheral.identifier.UUIDString]) {
-            device[@"rssi"] = RSSI;
-            exists = YES;
-            break;
-        }
-    }
-    
-    if (!exists) {
-        NSDictionary *deviceDict = @{
-            @"name": deviceName,
-            @"type": type,
-            @"uuid": uuidString,
-            @"major": @(major),
-            @"minor": @(minor),
-            @"rssi": RSSI,
-            @"identifier": peripheral.identifier.UUIDString
-        };
-        [self.discoveredDevices addObject:deviceDict];
-    }
-    
-    // إرسال البيانات للواجهة لتحديث الجدول فوراً
-    if (self.delegate && [self.delegate respondsToSelector:@selector(blueToothManagerDidUpdateDiscoveredDevices:)]) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self.delegate blueToothManagerDidUpdateDiscoveredDevices:self.discoveredDevices];
-        });
+        NSLog(@"[LSBluetoothManager] تم التقاط جهاز يبث حزمة Manufacturer Data: %@", manufacturerData);
+        // يمكنك هنا استخراج الـ UUID والـ Major والـ Minor وتمريرها لواجهة التحكم للاستخدام لاحقاً في التزوير
     }
 }
 
-#pragma mark - Spoofing Logic (التزييف والبث)
-
-- (void)startSpoofingBeaconWithUUID:(NSString *)uuidStr major:(uint16_t)major minor:(uint16_t)minor {
-    [self stopSpoofing];
-    NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:uuidStr];
-    if (!uuid) return;
-    
-    CLBeaconRegion *beaconRegion = [[CLBeaconRegion alloc] initWithProximityUUID:uuid major:major minor:minor identifier:@"SpoofedBeacon"];
-    self.advertisingData = [beaconRegion peripheralDataWithMeasuredPower:nil];
-    [self initAndStartPeripheral];
-}
-
-- (void)startSpoofingGenericBLEWithServiceUUID:(NSString *)serviceUUIDStr localName:(NSString *)name {
-    [self stopSpoofing];
-    CBUUID *uuid = [CBUUID CBUUIDWithString:serviceUUIDStr];
-    if (!uuid) return;
-    
-    self.advertisingData = @{
-        CBAdvertisingDataServiceUUIDsKey: @[uuid],
-        CBAdvertisingDataLocalNameKey: name ?: @"BLE Device"
-    };
-    [self initAndStartPeripheral];
-}
-
-- (void)initAndStartPeripheral {
-    if (!self.peripheralManager) {
-        self.peripheralManager = [[CBPeripheralManager alloc] initWithDelegate:self queue:nil options:nil];
-    } else {
-        [self peripheralManagerDidUpdateState:self.peripheralManager];
-    }
-}
-
-- (void)stopSpoofing {
-    if (self.peripheralManager && self.peripheralManager.isAdvertising) {
-        [self.peripheralManager stopAdvertising];
-    }
-    self.isAdvertising = NO;
-}
+#pragma mark - CBPeripheralManagerDelegate (حالة البث والتزوير)
 
 - (void)peripheralManagerDidUpdateState:(CBPeripheralManager *)peripheral {
-    if (peripheral.state == CBPeripheralManagerStatePoweredOn) {
+    if (peripheral.state == CBManagerStatePoweredOn) {
+        NSLog(@"[LSBluetoothManager] نظام البث والتزوير (Peripheral) جاهز ومفعل.");
         if (self.advertisingData) {
             [self.peripheralManager startAdvertising:self.advertisingData];
             self.isAdvertising = YES;
         }
     } else {
         self.isAdvertising = NO;
+        NSLog(@"[LSBluetoothManager] نظام البث غير متاح: %ld", (long)peripheral.state);
+    }
+}
+
+- (void)peripheralManagerDidStartAdvertising:(CBPeripheralManager *)peripheral error:(nullable NSError *)error {
+    if (error) {
+        NSLog(@"[LSBluetoothManager] فشل بدء بث الإشارة المزيفة: %@", error.localizedDescription);
+        self.isAdvertising = NO;
+    } else {
+        NSLog(@"[LSBluetoothManager] يتم الآن بث الإشارة التزويرية بنجاح على نطاق الجوار.");
     }
 }
 
