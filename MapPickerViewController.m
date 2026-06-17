@@ -7,6 +7,7 @@
 
 #import <CoreLocation/CoreLocation.h>
 #import <MapKit/MapKit.h>
+#import <CommonCrypto/CommonDigest.h> // 👈 تم إضافة سطر التشفير هنا تلقائياً
 
 static const CGFloat kLSCornerRadius = 16.0;
 static const CGFloat kLSHorizontalInset = 20.0;
@@ -24,7 +25,7 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
 #pragma mark - Lifecycle
 
 - (void)viewDidLoad {
-    [super viewDidLoad];
+    [super upper viewDidLoad];
 
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
     self.selectedCoordinate = CLLocationCoordinate2DMake(37.7749, -122.4194);
@@ -69,6 +70,7 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     [super viewDidAppear:animated];
     LSSetHooksBypassed(YES);
     [self configureMapIfNeeded];
+    [self checkActivation]; // 👈 تم دمج أمر التحقق من الكود هنا عند ظهور الواجهة
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -1512,6 +1514,77 @@ static const CGFloat kLSMapHeightMultiplier = 0.30;
     [self playSimulationStopHaptic];
     LSSetHooksBypassed(NO);
     [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+#pragma mark - 🔐 Activation System (نظام كود التفعيل المضاف)
+
+- (void)checkActivation {
+    BOOL isActivated = [[NSUserDefaults standardUserDefaults] boolForKey:@"LS_IsActivated"];
+    if (isActivated) {
+        return;
+    }
+    
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"تفعيل الأداة" 
+                                                                   message:@"الرجاء إدخال كود التفعيل المكون من 14 رمزاً للاستمرار:" 
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    
+    [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
+        textField.placeholder = @"LS-XXXXXXX-XXXX";
+        textField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
+    }];
+    
+    UIAlertAction *activateAction = [UIAlertAction actionWithTitle:@"تفعيل" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        UITextField *textField = alert.textFields.firstObject;
+        NSString *enteredCode = [textField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        
+        if ([self validateCode:enteredCode]) {
+            [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"LS_IsActivated"];
+            [[NSUserDefaults standardUserDefaults] synchronize];
+            
+            UIAlertController *successAlert = [UIAlertController alertControllerWithTitle:@"تم التفعيل" message:@"تم تفعيل الأداة بنجاح! شكراً لك." preferredStyle:UIAlertControllerStyleAlert];
+            [successAlert addAction:[UIAlertAction actionWithTitle:@"موافق" style:UIAlertActionStyleDefault handler:nil]];
+            [self presentViewController:successAlert animated:YES completion:nil];
+        } else {
+            UIAlertController *failAlert = [UIAlertController alertControllerWithTitle:@"خطأ في التفعيل" message:@"كود التفعيل الذي أدخلته غير صحيح!" preferredStyle:UIAlertControllerStyleAlert];
+            [failAlert addAction:[UIAlertAction actionWithTitle:@"إعادة المحاولة" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+                [self checkActivation];
+            }]];
+            [self presentViewController:failAlert animated:YES completion:nil];
+        }
+    }];
+    
+    [alert addAction:activateAction];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (BOOL)validateCode:(NSString *)code {
+    if (!code || code.length < 14) return NO;
+    
+    NSArray *parts = [code componentsSeparatedByString:@"-"];
+    if (parts.count != 3) return NO;
+    
+    NSString *prefix = parts[0];
+    NSString *numberPart = parts[1];
+    NSString *hashPart = parts[2];
+    
+    if (![prefix isEqualToString:@"LS"]) return NO;
+    
+    NSInteger num = [numberPart integerValue];
+    if (num < 1000000 || num > 1999999) return NO;
+    
+    NSString *secretSalt = @"LS_Protection_2026";
+    NSString *inputStr = [NSString stringWithFormat:@"%ld%@", (long)num, secretSalt];
+    
+    const char *cStr = [inputStr UTF8String];
+    unsigned char digest[16];
+    CC_MD5(cStr, (CC_LONG)strlen(cStr), digest);
+    
+    NSMutableString *computedHash = [NSMutableString stringWithCapacity:4];
+    for(int i = 0; i < 2; i++) {
+        [computedHash appendFormat:@"%02X", digest[i]];
+    }
+    
+    return [computedHash isEqualToString:hashPart];
 }
 
 @end
