@@ -1,5 +1,9 @@
 #import "LSBluetoothManager.h"
 
+// إعلان مسبق للفئات لتفادي تعارض الـ Signatures في المترجم الصارم دون استدعاء ملفات نظام
+@class CBCentralManager;
+@class CBPeripheralManager;
+
 @interface LSBluetoothManager ()
 
 @property (nonatomic, strong) id centralManager;
@@ -34,7 +38,6 @@
             #pragma clang diagnostic push
             #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
             
-            // تهيئة المكونات بأسلوب متوافق تماماً مع حماية الذاكرة ARC
             id allocatedCentral = [CBCentralManagerClass alloc];
             _centralManager = [allocatedCentral performSelector:NSSelectorFromString(@"initWithDelegate:queue:") withObject:self withObject:nil];
             
@@ -51,7 +54,7 @@
     if (!self.isScanning && self.centralManager) {
         SEL scanSelector = NSSelectorFromString(@"scanForPeripheralsWithServices:options:");
         if ([self.centralManager respondsToSelector:scanSelector]) {
-            NSDictionary *options = @{@"kCBScanOptionAllowDuplicates": @YES};
+            NSDictionary *options = @{@"CBCentralManagerScanOptionAllowDuplicatesKey": @YES};
             
             #pragma clang diagnostic push
             #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
@@ -133,21 +136,21 @@
     }
 }
 
-#pragma mark - Delegate Callbacks (Safe KVC)
+#pragma mark - Delegate Callbacks (مطابقة تامة لمنع أخطاء المترجم الصارم)
 
-- (void)centralManagerDidUpdateState:(id)central {
+- (void)centralManagerDidUpdateState:(CBCentralManager *)central {
     @try {
-        // استخدام الـ KVC لقراءة الأرقام البرمجية بأمان وتجنب مشاكل الـ Casting للـ Enums
-        NSInteger state = [[central valueForKey:@"state"] integerValue];
+        // تحويل الكائن برمجياً إلى id لتخطي الحماية وقراءة الحالة بأمان عبر KVC
+        NSInteger state = [[(id)central valueForKey:@"state"] integerValue];
         NSLog(@"[LSBluetoothManager] تحديث حالة الالتقاط المركزي: %ld", (long)state);
     } @catch (NSException *exception) {
         NSLog(@"[LSBluetoothManager] تحذير أثناء جلب الحالة: %@", exception.reason);
     }
 }
 
-- (void)peripheralManagerDidUpdateState:(id)peripheral {
+- (void)peripheralManagerDidUpdateState:(CBPeripheralManager *)peripheral {
     @try {
-        NSInteger state = [[peripheral valueForKey:@"state"] integerValue];
+        NSInteger state = [[(id)peripheral valueForKey:@"state"] integerValue];
         NSLog(@"[LSBluetoothManager] تحديث حالة البث الفرعي: %ld", (long)state);
     } @catch (NSException *exception) {
         NSLog(@"[LSBluetoothManager] تحذير أثناء جلب الحالة: %@", exception.reason);
