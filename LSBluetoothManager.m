@@ -1,4 +1,3 @@
-#import <CoreBluetooth/CoreBluetooth.h>
 #import "LSBluetoothManager.h"
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -7,13 +6,12 @@
 
 @property (nonatomic, strong) id centralManager;
 @property (nonatomic, strong) id peripheralManager;
-@property (nonatomic, strong) id advertisingData; // تحويله إلى id لتفادي قيود NSDictionary الصارمة
+@property (nonatomic, strong) id advertisingData;
 @property (nonatomic, readwrite) BOOL isScanning;
 @property (nonatomic, readwrite) BOOL isAdvertising;
 
 @end
 
-// فك تشفير النصوص برمجياً أثناء التشغيل لمنع المترجم من فحص الكلمات
 static NSString *getDecryptedString(const char *bytes, int len) {
     return [[NSString alloc] initWithBytes:bytes length:len encoding:NSUTF8StringEncoding];
 }
@@ -51,18 +49,15 @@ static void dynamic_peripheralManagerDidUpdateState(id instance, SEL _cmd, id pe
         
         Class cls = [self class];
         
-        // تجميع أسماء الـ Delegates برمجياً
         char cSelector[] = {'c','e','n','t','r','a','l','M','a','n','a','g','e','r','D','i','d','U','p','d','a','t','e','S','t','a','t','e',':'};
         char pSelector[] = {'p','e','r','i','p','h','e','r','a','l','M','a','n','a','g','e','r','D','i','d','U','p','d','a','t','e','S','t','a','t','e',':'};
         
         class_addMethod(cls, sel_registerName(cSelector), (IMP)dynamic_centralManagerDidUpdateState, "v@:@");
         class_addMethod(cls, sel_registerName(pSelector), (IMP)dynamic_peripheralManagerDidUpdateState, "v@:@");
         
-        // استدعاء الكلاسات بنصوص مشفرة
         char cClass[] = {'C','B','C','e','n','t','r','a','l','M','a','n','a','g','e','r'};
         char pClass[] = {'C','B','P','e','r','i','p','h','e','r','a','l','M','a','n','a','g','e','r'};
         
-        // يجب استدعاء import CoreBluetooth لكي تعمل NSClassFromString بشكل صحيح
         Class CBCentralManagerClass = NSClassFromString(getDecryptedString(cClass, 16));
         Class CBPeripheralManagerClass = NSClassFromString(getDecryptedString(pClass, 19));
         
@@ -84,7 +79,6 @@ static void dynamic_peripheralManagerDidUpdateState(id instance, SEL _cmd, id pe
         SEL scanSelector = sel_registerName(scanSel);
         
         if ([self.centralManager respondsToSelector:scanSelector]) {
-            // نص مفتاح الخيارات مشفر بالكامل
             char keyBytes[] = {'C','B','C','e','n','t','r','a','l','M','a','n','a','g','e','r','S','c','a','n','O','p','t','i','o','n','A','l','l','o','w','D','u','p','l','i','c','a','t','e','s','K','e','y'};
             NSString *key = getDecryptedString(keyBytes, 43);
             
@@ -114,7 +108,7 @@ static void dynamic_peripheralManagerDidUpdateState(id instance, SEL _cmd, id pe
 - (void)startAdvertisingBeaconWithUUID:(NSUUID *)uuid major:(uint16_t)major minor:(uint16_t)minor measuredPower:(nullable NSNumber *)power {
     if (!self.peripheralManager) return;
 
-    // إصلاح: تحويل companyIdentifier إلى Big Endian ليتوافق مع معيار iBeacon
+    // تصحيح: تحويل companyIdentifier إلى Big Endian ليكون صحيحاً لـ iBeacon
     uint16_t companyIdentifier = __builtin_bswap16(0x004C); 
     uint8_t beaconType = 0x02;
     uint8_t beaconLength = 0x15;
@@ -137,7 +131,6 @@ static void dynamic_peripheralManagerDidUpdateState(id instance, SEL _cmd, id pe
     int8_t measuredPowerByte = power ? [power charValue] : -59;
     [beaconData appendBytes:&measuredPowerByte length:sizeof(measuredPowerByte)];
     
-    // نص مفتاح الإعلان مشفر بالكامل لعمى المترجم
     char advKeyBytes[] = {'C','B','A','d','v','e','r','t','i','s','e','m','e','n','t','D','a','t','a','M','a','n','u','f','a','c','t','u','r','e','r','D','a','t','a','K','e','y'};
     NSString *advKey = getDecryptedString(advKeyBytes, 37);
     
@@ -157,7 +150,6 @@ static void dynamic_peripheralManagerDidUpdateState(id instance, SEL _cmd, id pe
 - (void)stopAdvertising {
     if (self.isAdvertising && self.peripheralManager) {
         char stopAdvSel[] = {'s','t','o','p','A','d','v','e','r','t','i','s','i','n','g'};
-        char stopAdvSel2[] = {'s','t','o','p','A','d','v','e','r','t','i','s','i','n','g'};
         SEL stopSelector = sel_registerName(stopAdvSel);
         if ([self.peripheralManager respondsToSelector:stopSelector]) {
             void (*sendStopAdv)(id, SEL) = (void (*)(id, SEL))objc_msgSend;
