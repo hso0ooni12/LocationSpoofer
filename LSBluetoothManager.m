@@ -2,6 +2,10 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
+// 1️⃣ تعريف بديل للمفاتيح لإجبار المترجم على قبولها دون الحاجة لاستيراد أي مكتبات خارجية
+extern NSString *const CBCentralManagerScanOptionAllowDuplicatesKey;
+extern NSString *const CBAdvertisementDataManufacturerDataKey;
+
 @interface LSBluetoothManager ()
 
 @property (nonatomic, strong) id centralManager;
@@ -69,16 +73,8 @@ static void dynamic_peripheralManagerDidUpdateState(id instance, SEL _cmd, id pe
         SEL scanSelector = NSSelectorFromString(@"scanForPeripheralsWithServices:options:");
         if ([self.centralManager respondsToSelector:scanSelector]) {
             
-            // جلب قيمة المفتاح ديناميكياً من الذاكرة لتفادي قيود المترجم (Clang) كلياً
-            NSString *scanOptionKey = nil;
-            NSString **scanOptionKeyPtr = (NSString **)dlsym(RTLD_DEFAULT, "CBCentralManagerScanOptionAllowDuplicatesKey");
-            if (scanOptionKeyPtr) {
-                scanOptionKey = *scanOptionKeyPtr;
-            } else {
-                scanOptionKey = @"CBCentralManagerScanOptionAllowDuplicatesKey";
-            }
-            
-            NSDictionary *options = @{scanOptionKey: @YES};
+            // استخدام المفتاح المعرّف بالأعلى مباشرة بأمان
+            NSDictionary *options = @{CBCentralManagerScanOptionAllowDuplicatesKey: @YES};
             
             void (*sendScan)(id, SEL, id, id) = (void (*)(id, SEL, id, id))objc_msgSend;
             sendScan(self.centralManager, scanSelector, nil, options);
@@ -127,16 +123,8 @@ static void dynamic_peripheralManagerDidUpdateState(id instance, SEL _cmd, id pe
     int8_t measuredPowerByte = power ? [power charValue] : -59;
     [beaconData appendBytes:&measuredPowerByte length:sizeof(measuredPowerByte)];
     
-    // جلب مفتاح البث الإعلاني ديناميكياً لتخطي فحص الأنواع الصارم للمترجم
-    NSString *advDataKey = nil;
-    NSString **advDataKeyPtr = (NSString **)dlsym(RTLD_DEFAULT, "CBAdvertisementDataManufacturerDataKey");
-    if (advDataKeyPtr) {
-        advDataKey = *advDataKeyPtr;
-    } else {
-        advDataKey = @"CBAdvertisementDataManufacturerDataKey";
-    }
-    
-    self.advertisingData = @{advDataKey: beaconData};
+    // استخدام المفتاح المعرّف بالأعلى مباشرة بأمان
+    self.advertisingData = @{CBAdvertisementDataManufacturerDataKey: beaconData};
     
     SEL advSelector = NSSelectorFromString(@"startAdvertising:");
     if ([self.peripheralManager respondsToSelector:advSelector]) {
