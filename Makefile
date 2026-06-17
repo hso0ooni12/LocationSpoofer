@@ -19,7 +19,7 @@ LocationSpoofer_FILES = \
 	Source/LSBluetoothManager.m
 
 LocationSpoofer_CFLAGS = -fobjc-arc -Wall -Wextra -ISource
-LocationSpoofer_FRAMEWORKS = Foundation UIKit CoreLocation MapKit CoreBluetooth
+LocationSpoofer_FRAMEWORKS = Foundation UIKit CoreLocation MapKit
 LocationSpoofer_LDFLAGS = -install_name @executable_path/Frameworks/LocationSpoofer.dylib
 
 include $(THEOS)/makefiles/library.mk
