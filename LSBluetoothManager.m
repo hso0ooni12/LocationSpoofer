@@ -12,10 +12,9 @@
 
 @end
 
-// 1️⃣ دالات C خارجية لتمثيل الـ Delegates (مخفية تماماً عن فحص المترجم الصارم)
-static void dynamic_centralManagerDidUpdateState(id self, SEL _cmd, id central) {
+// تغيير اسم البارامتر من self إلى instance لتفادي الكلمات المحجوزة في المترجم تماماً
+static void dynamic_centralManagerDidUpdateState(id instance, SEL _cmd, id central) {
     @try {
-        // قراءة الحالة بأمان عبر KVC لتفادي أي كاستنج مجهول
         NSInteger state = [[central valueForKey:@"state"] integerValue];
         NSLog(@"[LSBluetoothManager] تحديث حالة الالتقاط المركزي ديناميكياً: %ld", (long)state);
     } @catch (NSException *exception) {
@@ -23,7 +22,7 @@ static void dynamic_centralManagerDidUpdateState(id self, SEL _cmd, id central) 
     }
 }
 
-static void dynamic_peripheralManagerDidUpdateState(id self, SEL _cmd, id peripheral) {
+static void dynamic_peripheralManagerDidUpdateState(id instance, SEL _cmd, id peripheral) {
     @try {
         NSInteger state = [[peripheral valueForKey:@"state"] integerValue];
         NSLog(@"[LSBluetoothManager] تحديث حالة البث الفرعي ديناميكياً: %ld", (long)state);
@@ -49,7 +48,7 @@ static void dynamic_peripheralManagerDidUpdateState(id self, SEL _cmd, id periph
         _isScanning = NO;
         _isAdvertising = NO;
         
-        // 2️⃣ حقن الدالات ديناميكياً في الـ Class لتخطي حماية المترجم (Clang) بنسبة 100%
+        // تسجيل الدالات ديناميكياً في الذاكرة لتخطي بروتوكولات النظام وقت التجميع
         Class cls = [self class];
         class_addMethod(cls, NSSelectorFromString(@"centralManagerDidUpdateState:"), (IMP)dynamic_centralManagerDidUpdateState, "v@:@");
         class_addMethod(cls, NSSelectorFromString(@"peripheralManagerDidUpdateState:"), (IMP)dynamic_peripheralManagerDidUpdateState, "v@:@");
@@ -58,7 +57,7 @@ static void dynamic_peripheralManagerDidUpdateState(id self, SEL _cmd, id periph
         Class CBPeripheralManagerClass = NSClassFromString(@"CBPeripheralManager");
         
         if (CBCentralManagerClass && CBPeripheralManagerClass) {
-            // استدعاء محرك التخصيص عبر objc_msgSend الصافي والمتوافق كلياً مع ARC
+            // صياغة استدعاء صريحة عبر الـ Runtime متوافقة 100% مع إدارة الذاكرة ARC
             id (*sendInitWithDelegate)(id, SEL, id, id) = (id (*)(id, SEL, id, id))objc_msgSend;
             
             _centralManager = sendInitWithDelegate([CBCentralManagerClass alloc], NSSelectorFromString(@"initWithDelegate:queue:"), self, nil);
@@ -72,7 +71,7 @@ static void dynamic_peripheralManagerDidUpdateState(id self, SEL _cmd, id periph
     if (!self.isScanning && self.centralManager) {
         SEL scanSelector = NSSelectorFromString(@"scanForPeripheralsWithServices:options:");
         if ([self.centralManager respondsToSelector:scanSelector]) {
-            NSDictionary *options = @{@"CBCentralManagerScanOptionAllowDuplicatesKey": @YES};
+            NSDictionary *options = @{@"kCBScanOptionAllowDuplicates": @YES};
             
             void (*sendScan)(id, SEL, id, id) = (void (*)(id, SEL, id, id))objc_msgSend;
             sendScan(self.centralManager, scanSelector, nil, options);
