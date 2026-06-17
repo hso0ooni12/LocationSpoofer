@@ -1,324 +1,162 @@
-#import "LocationSpoofer.h"
-#import "PersistenceManager.h"
-#import "RouteSimulator.h"
-#import "LSHooking.h"
+#import "LSBluetoothManager.h"
 
-#import <objc/runtime.h>
-#import <objc/message.h>
-#import <os/log.h>
+@interface LSBluetoothManager () <CBCentralManagerDelegate, CBPeripheralManagerDelegate>
 
-static _Thread_local BOOL ls_internalCreate = NO;
-static BOOL ls_hooksBypassed = NO;
-static NSHashTable *ls_swizzledDelegateClasses = nil;
-static NSMutableSet *ls_observedDelegateClasses = nil;
-static dispatch_once_t ls_delegateTablesOnceToken;
-static dispatch_once_t ls_hookSelectorsOnceToken;
-static os_log_t ls_log = NULL;
+// المدير المسؤول عن البحث والتقاط الأجهزة المحيطة (Central)
+@property (nonatomic, strong) CBCentralManager *centralManager;
 
-static SEL ls_hookDidUpdateLocationsSEL = NULL;
-static SEL ls_hookDidUpdateToLocationSEL = NULL;
+// المدير المسؤول عن إعادة بث الإشارات المزيفة (Peripheral)
+@property (nonatomic, strong) CBPeripheralManager *peripheralManager;
 
-static void LSHookDidUpdateLocations(id self, SEL _cmd, CLLocationManager *manager, NSArray<CLLocation *> *locations);
-static void LSHookDidUpdateToLocation(id self, SEL _cmd, CLLocationManager *manager, CLLocation *newLocation, CLLocation *oldLocation);
-
-BOOL LSIsInternalLocationCreate(void) {
-    return ls_internalCreate;
-}
-
-void LSSetHooksBypassed(BOOL bypassed) {
-    @synchronized([LocationSpoofer class]) {
-        ls_hooksBypassed = bypassed;
-    }
-}
-
-static BOOL LSHooksBypassed(void) {
-    @synchronized([LocationSpoofer class]) {
-        return ls_hooksBypassed;
-    }
-}
-
-static BOOL LSShouldSpoof(void) {
-    return !ls_internalCreate &&
-           !LSHooksBypassed() &&
-           [[PersistenceManager shared] isSpoofingEnabled];
-}
-
-static CLLocation *LSBuildSpoofedLocation(CLLocationCoordinate2D coordinate,
-                                          CLLocationDirection course,
-                                          double altitude,
-                                          double horizontalAccuracy,
-                                          double speed) {
-    ls_internalCreate = YES;
-    CLLocation *location = [[CLLocation alloc] initWithCoordinate:coordinate
-                                                         altitude:altitude
-                                               horizontalAccuracy:horizontalAccuracy
-                                                 verticalAccuracy:6.0
-                                                            course:course
-                                                             speed:speed
-                                                         timestamp:[NSDate date]];
-    ls_internalCreate = NO;
-    return location;
-}
-
-static CLLocationCoordinate2D LSApplyFluctuation(CLLocationCoordinate2D coordinate, double radiusMeters) {
-    if (radiusMeters <= 0.0) {
-        return coordinate;
-    }
-
-    double angle = (double)arc4random_uniform(UINT32_MAX) / (double)UINT32_MAX * 2.0 * M_PI;
-    double distance = sqrt((double)arc4random_uniform(UINT32_MAX) / (double)UINT32_MAX) * radiusMeters;
-
-    double latOffset = distance * cos(angle) / 111320.0;
-    double cosLat = cos(coordinate.latitude * M_PI / 180.0);
-    double lonOffset = 0.0;
-    if (fabs(cosLat) > 1e-6) {
-        lonOffset = distance * sin(angle) / (111320.0 * cosLat);
-    }
-
-    double newLat = coordinate.latitude + latOffset;
-    double newLon = coordinate.longitude + lonOffset;
-
-    if (newLat > 90.0) {
-        newLat = 90.0;
-    } else if (newLat < -90.0) {
-        newLat = -90.0;
-    }
-
-    if (newLon > 180.0) {
-        newLon -= 360.0;
-    } else if (newLon < -180.0) {
-        newLon += 360.0;
-    }
-
-    return CLLocationCoordinate2DMake(newLat, newLon);
-}
-
-CLLocation *LSCreateSpoofedLocation(void) {
-    LSRouteSimulator *simulator = [LSRouteSimulator shared];
-    if (simulator.isSimulating) {
-        LSTransportMode mode = simulator.transportMode;
-        double speed = [LSRouteSimulator speedMetersPerSecondForMode:mode customSpeedKmh:simulator.customSpeedKmh];
-        double accuracy = [LSRouteSimulator horizontalAccuracyForMode:mode];
-        PersistenceManager *store = [PersistenceManager shared];
-        return LSBuildSpoofedLocation(simulator.currentCoordinate,
-                                      simulator.currentHeading,
-                                      store.altitude,
-                                      accuracy,
-                                      speed);
-    }
-
-    PersistenceManager *store = [PersistenceManager shared];
-    CLLocationCoordinate2D baseCoordinate = [store spoofCoordinate];
-    if (store.fluctuationEnabled) {
-        baseCoordinate = LSApplyFluctuation(baseCoordinate, store.fluctuationRadius);
-    }
-    return LSBuildSpoofedLocation(baseCoordinate,
-                                store.heading,
-                                store.altitude,
-                                6.0,
-                                0.0);
-}
-
-static BOOL LSIsSystemFrameworkBundle(NSBundle *bundle) {
-    NSString *path = bundle.bundlePath;
-    if (path.length == 0) {
-        return YES;
-    }
-    if ([path hasPrefix:@"/System/"]) {
-        return YES;
-    }
-    if ([path hasPrefix:@"/private/preboot/Cryptexes/"]) {
-        return YES;
-    }
-    if ([path hasPrefix:@"/usr/"]) {
-        return YES;
-    }
-    return NO;
-}
-
-static void LSInitializeDelegateTables(void) {
-    dispatch_once(&ls_delegateTablesOnceToken, ^{
-        ls_swizzledDelegateClasses = [NSHashTable weakObjectsHashTable];
-        ls_observedDelegateClasses = [NSMutableSet set];
-    });
-}
-
-static void LSInitializeDelegateHookSelectors(void) {
-    dispatch_once(&ls_hookSelectorsOnceToken, ^{
-        NSString *suffix = NSUUID.UUID.UUIDString;
-        NSString *locationsName = [NSString stringWithFormat:@"lsp_locationManager_didUpdateLocations_%@:", suffix];
-        NSString *legacyName = [NSString stringWithFormat:@"lsp_locationManager_didUpdateToLocation_fromLocation_%@:", suffix];
-        ls_hookDidUpdateLocationsSEL = sel_registerName(locationsName.UTF8String);
-        ls_hookDidUpdateToLocationSEL = sel_registerName(legacyName.UTF8String);
-    });
-}
-
-static BOOL LSShouldSwizzleDelegateClass(Class delegateClass) {
-    if (!delegateClass || delegateClass == [NSObject class]) {
-        return NO;
-    }
-
-    NSString *className = NSStringFromClass(delegateClass);
-    if (className.length == 0 || [className hasPrefix:@"_"]) {
-        return NO;
-    }
-
-    if (LSIsSystemFrameworkBundle([NSBundle bundleForClass:delegateClass])) {
-        return NO;
-    }
-
-    LSInitializeDelegateTables();
-    @synchronized(ls_swizzledDelegateClasses) {
-        return [ls_observedDelegateClasses containsObject:delegateClass];
-    }
-}
-
-static void LSObserveDelegateClass(Class delegateClass) {
-    if (!delegateClass || delegateClass == [NSObject class]) {
-        return;
-    }
-
-    if (LSIsSystemFrameworkBundle([NSBundle bundleForClass:delegateClass])) {
-        return;
-    }
-
-    LSInitializeDelegateTables();
-    @synchronized(ls_swizzledDelegateClasses) {
-        [ls_observedDelegateClasses addObject:delegateClass];
-    }
-}
-
-static void LSSwizzleDelegateForClass(Class delegateClass) {
-    if (!delegateClass || !LSShouldSwizzleDelegateClass(delegateClass)) {
-        return;
-    }
-
-    LSInitializeDelegateHookSelectors();
-
-    LSInitializeDelegateTables();
-    @synchronized(ls_swizzledDelegateClasses) {
-        Class locationsClass = LSClassDefiningInstanceMethod(delegateClass,
-                                                             @selector(locationManager:didUpdateLocations:));
-        if (locationsClass && ![ls_swizzledDelegateClasses containsObject:locationsClass]) {
-            if (LSInstallInstanceHookWithIMP(locationsClass,
-                                             @selector(locationManager:didUpdateLocations:),
-                                             ls_hookDidUpdateLocationsSEL,
-                                             (IMP)LSHookDidUpdateLocations)) {
-                [ls_swizzledDelegateClasses addObject:locationsClass];
-            }
-        }
-
-        Class legacyClass = LSClassDefiningInstanceMethod(delegateClass,
-                                                          @selector(locationManager:didUpdateToLocation:fromLocation:));
-        if (legacyClass && ![ls_swizzledDelegateClasses containsObject:legacyClass]) {
-            if (LSInstallInstanceHookWithIMP(legacyClass,
-                                             @selector(locationManager:didUpdateToLocation:fromLocation:),
-                                             ls_hookDidUpdateToLocationSEL,
-                                             (IMP)LSHookDidUpdateToLocation)) {
-                [ls_swizzledDelegateClasses addObject:legacyClass];
-            }
-        }
-    }
-}
-
-static void LSSwizzleDelegateIfNeeded(id delegate) {
-    if (!delegate) {
-        return;
-    }
-
-    Class delegateClass = [delegate class];
-    LSObserveDelegateClass(delegateClass);
-    LSSwizzleDelegateForClass(delegateClass);
-}
-
-static void LSHookDidUpdateLocations(id self, SEL _cmd, CLLocationManager *manager, NSArray<CLLocation *> *locations) {
-    (void)_cmd;
-    NSArray<CLLocation *> *deliveredLocations = locations;
-    if (LSShouldSpoof()) {
-        deliveredLocations = @[LSCreateSpoofedLocation()];
-    }
-
-    void (*originalIMP)(id, SEL, CLLocationManager *, NSArray<CLLocation *> *) =
-        (void (*)(id, SEL, CLLocationManager *, NSArray<CLLocation *> *))objc_msgSend;
-    originalIMP(self, ls_hookDidUpdateLocationsSEL, manager, deliveredLocations);
-}
-
-static void LSHookDidUpdateToLocation(id self, SEL _cmd, CLLocationManager *manager, CLLocation *newLocation, CLLocation *oldLocation) {
-    (void)_cmd;
-    CLLocation *deliveredLocation = newLocation;
-    if (LSShouldSpoof()) {
-        deliveredLocation = LSCreateSpoofedLocation();
-    }
-
-    void (*originalIMP)(id, SEL, CLLocationManager *, CLLocation *, CLLocation *) =
-        (void (*)(id, SEL, CLLocationManager *, CLLocation *, CLLocation *))objc_msgSend;
-    originalIMP(self, ls_hookDidUpdateToLocationSEL, manager, deliveredLocation, oldLocation);
-}
-
-@interface CLLocationManager (LSHooks)
-- (void)lsp_setDelegate:(id<CLLocationManagerDelegate>)delegate;
-- (CLLocation *)lsp_location;
-@end
-
-@implementation CLLocationManager (LSHooks)
-
-- (void)lsp_setDelegate:(id<CLLocationManagerDelegate>)delegate {
-    [self lsp_setDelegate:delegate];
-    if (delegate) {
-        LSSwizzleDelegateIfNeeded(delegate);
-    }
-}
-
-- (CLLocation *)lsp_location {
-    if (LSShouldSpoof()) {
-        return LSCreateSpoofedLocation();
-    }
-    return [self lsp_location];
-}
+@property (nonatomic, strong) NSDictionary *advertisingData;
+@property (nonatomic, readwrite) BOOL isScanning;
+@property (nonatomic, readwrite) BOOL isAdvertising;
 
 @end
 
-static void LSExchangeInstanceMethods(Class cls, SEL originalSelector, SEL swizzledSelector) {
-    Method originalMethod = class_getInstanceMethod(cls, originalSelector);
-    Method swizzledMethod = class_getInstanceMethod(cls, swizzledSelector);
-    if (!originalMethod || !swizzledMethod) {
-        return;
-    }
-    method_exchangeImplementations(originalMethod, swizzledMethod);
-}
+@implementation LSBluetoothManager
 
-static void LSInstallCLLocationManagerHooks(void) {
-    Class managerClass = NSClassFromString(@"CLLocationManager");
-    if (!managerClass) {
-        if (ls_log) {
-            os_log_error(ls_log, "CLLocationManager class missing at hook install");
-        }
-        return;
-    }
-
-    if (!class_getInstanceMethod(managerClass, @selector(setDelegate:))) {
-        if (ls_log) {
-            os_log_error(ls_log, "CLLocationManager setDelegate: missing at hook install");
-        }
-        return;
-    }
-
-    LSExchangeInstanceMethods(managerClass, @selector(setDelegate:), @selector(lsp_setDelegate:));
-
-    if (class_getInstanceMethod(managerClass, @selector(location))) {
-        LSExchangeInstanceMethods(managerClass, @selector(location), @selector(lsp_location));
-    }
-}
-
-@implementation LocationSpoofer
-
-+ (void)installHooks {
++ (instancetype)shared {
+    static LSBluetoothManager *sharedInstance = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        ls_log = os_log_create("com.locationspoofer.dylib", "hooks");
-        LSInitializeDelegateHookSelectors();
-        LSInstallCLLocationManagerHooks();
+        sharedInstance = [[self alloc] init];
     });
+    return sharedInstance;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        // تهيئة كلا المديرين للعمل بالتوازي (الالتقاط والبث)
+        _centralManager = [[CBCentralManager alloc] initWithDelegate:self queue:nil];
+        _peripheralManager = [[CBPeripheralManager alloc] initWithDelegate:self queue:nil];
+        _isScanning = NO;
+        _isAdvertising = NO;
+    }
+    return self;
+}
+
+#pragma mark - Scanning Logic (Central)
+
+- (void)startScanning {
+    if (self.centralManager.state == CBManagerStatePoweredOn && !self.isScanning) {
+        // البحث عن جميع أجهزة BLE المحيطة والسماح بالتكرار لالتقاط تحديثات الـ RSSI المستمرة
+        [self.centralManager scanForPeripheralsWithServices:nil options:@{CBCentralManagerScanOptionAllowDuplicatesKey: @YES}];
+        self.isScanning = YES;
+        NSLog(@"[LSBluetoothManager] بدأت عملية فحص والتقاط إشارات BLE المحيطة...");
+    }
+}
+
+- (void)stopScanning {
+    if (self.isScanning) {
+        [self.centralManager stopScan];
+        self.isScanning = NO;
+        NSLog(@"[LSBluetoothManager] توقفت عملية الفحص.");
+    }
+}
+
+#pragma mark - Advertising Logic (Peripheral)
+
+- (void)startAdvertisingWithData:(NSDictionary *)data {
+    self.advertisingData = data;
+    if (self.peripheralManager.state == CBManagerStatePoweredOn) {
+        [self.peripheralManager startAdvertising:self.advertisingData];
+        self.isAdvertising = YES;
+        NSLog(@"[LSBluetoothManager] بدأ بث بيانات البلوتوث المخصصة...");
+    }
+}
+
+// بناء حزمة بيانات iBeacon برمجياً لإعادة بثها وتزويرها (Spoofing)
+- (void)startAdvertisingBeaconWithUUID:(NSUUID *)uuid major:(uint16_t)major minor:(uint16_t)minor measuredPower:(nullable NSNumber *)power {
+    
+    uint16_t companyIdentifier = 0x004C; // معرف شركة Apple لانتحال بروتوكول iBeacon
+    uint8_t beaconType = 0x02;
+    uint8_t beaconLength = 0x15;
+    
+    NSMutableData *beaconData = [NSMutableData data];
+    
+    // تركيب الهيكل البنائي الافتراضي لحزمة الـ Beacon
+    [beaconData appendBytes:&companyIdentifier length:sizeof(companyIdentifier)];
+    [beaconData appendBytes:&beaconType length:sizeof(beaconType)];
+    [beaconData appendBytes:&beaconLength length:sizeof(beaconLength)];
+    
+    // استخدام مصفوفة بايت صريحة لتجنب خطأ التجميع uuid_t في بيئة الثيوس
+    unsigned char uuidBytes[16];
+    [uuid getUUIDBytes:uuidBytes];
+    [beaconData appendBytes:uuidBytes length:sizeof(uuidBytes)];
+    
+    // تحويل الـ Major والـ Minor إلى Big Endian ليتوافق مع بث الشبكات
+    uint16_t majorBigEndian = CFSwapInt16HostToBig(major);
+    [beaconData appendBytes:&majorBigEndian length:sizeof(majorBigEndian)];
+    
+    uint16_t minorBigEndian = CFSwapInt16HostToBig(minor);
+    [beaconData appendBytes:&minorBigEndian length:sizeof(minorBigEndian)];
+    
+    // تحديد قوة الإشارة المقاسة (Measured Power) عند مسافة 1 متر
+    int8_t measuredPowerByte = power ? [power charValue] : -59;
+    [beaconData appendBytes:&measuredPowerByte length:sizeof(measuredPowerByte)];
+    
+    NSDictionary *advertisementDict = @{
+        CBAdvertisementDataManufacturerDataKey: beaconData
+    };
+    
+    [self startAdvertisingWithData:advertisementDict];
+}
+
+- (void)stopAdvertising {
+    if (self.isAdvertising) {
+        [self.peripheralManager stopAdvertising];
+        self.isAdvertising = NO;
+        NSLog(@"[LSBluetoothManager] توقف بث الإشارات المزيفة.");
+    }
+}
+
+#pragma mark - CBCentralManagerDelegate (التقاط وتحليل الإشارات)
+
+- (void)centralManagerDidUpdateState:(CBCentralManager *)central {
+    if (central.state == CBManagerStatePoweredOn) {
+        NSLog(@"[LSBluetoothManager] نظام الالتقاط (Central) جاهز ومفعل.");
+        if (self.isScanning) {
+            [self.centralManager scanForPeripheralsWithServices:nil options:nil];
+        }
+    } else {
+        self.isScanning = NO;
+        NSLog(@"[LSBluetoothManager] نظام الالتقاط غير متاح حالياً: %ld", (long)central.state);
+    }
+}
+
+- (void)centralManager:(CBCentralManager *)central didDiscoverPeripheral:(CBPeripheral *)peripheral advertisementData:(NSDictionary<NSString *,id> *)advertisementData RSSI:(NSNumber *)RSSI {
+    
+    // استخراج بيانات الشركة المصنعة لفحص ما إذا كانت إشارة iBeacon ليتم حفظها وتزويرها
+    NSData *manufacturerData = advertisementData[CBAdvertisementDataManufacturerDataKey];
+    if (manufacturerData && manufacturerData.length >= 25) {
+        NSLog(@"[LSBluetoothManager] تم التقاط جهاز يبث حزمة Manufacturer Data: %@", manufacturerData);
+    }
+}
+
+#pragma mark - CBPeripheralManagerDelegate (حالة البث والتزوير)
+
+- (void)peripheralManagerDidUpdateState:(CBPeripheralManager *)peripheral {
+    if (peripheral.state == CBManagerStatePoweredOn) {
+        NSLog(@"[LSBluetoothManager] نظام البث والتزوير (Peripheral) جاهز ومفعل.");
+        if (self.advertisingData) {
+            [self.peripheralManager startAdvertising:self.advertisingData];
+            self.isAdvertising = YES;
+        }
+    } else {
+        self.isAdvertising = NO;
+        NSLog(@"[LSBluetoothManager] نظام البث غير متاح: %ld", (long)peripheral.state);
+    }
+}
+
+- (void)peripheralManagerDidStartAdvertising:(CBPeripheralManager *)peripheral error:(nullable NSError *)error {
+    if (error) {
+        NSLog(@"[LSBluetoothManager] فشل بدء بث الإشارة المزيفة: %@", error.localizedDescription);
+        self.isAdvertising = NO;
+    } else {
+        NSLog(@"[LSBluetoothManager] يتم الآن بث الإشارة التزويرية بنجاح على نطاق الجوار.");
+    }
 }
 
 @end
