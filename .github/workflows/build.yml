@@ -1,4 +1,4 @@
-name: Build iOS Tweak
+name: Build iOS dylib
 
 on:
   workflow_dispatch:
@@ -8,41 +8,101 @@ jobs:
     runs-on: macos-latest
 
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v6
 
-    - name: Prepare Project Structure
-      run: |
-        if [ -f "project.zip" ]; then
-          unzip -o project.zip || true
-        fi
-        mkdir -p Source
-        mv *.m *.h Source/ 2>/dev/null || true
+      - name: Prepare Project Structure
+        shell: bash
+        run: |
+          set -e
+          mkdir -p Source
+          find . -maxdepth 1 -type f \( -name '*.m' -o -name '*.h' \) -exec mv -f {} Source/ \;
 
-    - name: Clone Theos
-      run: |
-        git clone --recursive https://github.com/theos/theos.git ~/theos
+          # v60 build fix: remove legacy duplicate hook files after the rename.
+          # XsGpS.m is the official main hook file. Keeping LocationSpoofer.m
+          # beside it causes duplicate symbols during linking.
+          if [ -f Source/XsGpS.m ]; then
+            rm -f Source/LocationSpoofer.m Source/LocationSpoofer.h
+          fi
 
-    - name: Download iOS 16 SDK (Ultra Fast & Reliable)
-      run: |
-        cd ~/theos/sdks
-        git init
-        git remote add origin https://github.com/xybp888/iOS-SDKs.git
-        git config core.sparseCheckout true
-        echo "iPhoneOS16.5.sdk/*" >> .git/info/sparse-checkout
-        git pull --depth 1 origin master
+          echo "Source files:"
+          find Source -maxdepth 1 -type f | sort
 
-    - name: Install ldid (Signing Tool)
-      run: |
-        brew install ldid
+      - name: Clone Theos
+        shell: bash
+        run: |
+          set -e
+          git clone --recursive --depth 1 https://github.com/theos/theos.git ~/theos
 
-    - name: Compile Tweak
-      run: |
-        export THEOS=~/theos
-        make FINALPACKAGE=1
+      - name: Download iOS 16 SDK
+        shell: bash
+        run: |
+          set -e
+          mkdir -p ~/theos/sdks
+          cd ~/theos/sdks
+          git init
+          git remote add origin https://github.com/xybp888/iOS-SDKs.git
+          git config core.sparseCheckout true
+          echo "iPhoneOS16.5.sdk/*" > .git/info/sparse-checkout
+          git pull --depth 1 origin master
 
-    - name: Upload dylib Product
-      uses: actions/upload-artifact@v4
-      with:
-        name: LocationSpoofer-dylib
-        path: .theos/obj/LocationSpoofer.dylib
+      - name: Install ldid
+        shell: bash
+        run: |
+          set -e
+          # GitHub macOS runners may contain unrelated third-party taps.
+          # Remove the unused AWS tap so Homebrew does not emit tap-trust warnings.
+          brew untap aws/tap >/dev/null 2>&1 || true
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install ldid
+
+      - name: Compile dylib
+        shell: bash
+        run: |
+          set -euo pipefail
+          export THEOS=~/theos
+          make clean
+          make FINALPACKAGE=1
+
+          echo "=== Theos dylib outputs ==="
+          find .theos -type f -name '*.dylib' -print 2>/dev/null || true
+
+          echo "=== Package outputs (if any) ==="
+          find packages -type f -name '*.deb' -print 2>/dev/null || true
+
+      - name: Collect build products
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf build-artifacts
+          mkdir -p build-artifacts
+
+          found=0
+
+          while IFS= read -r -d '' file; do
+            cp -f "$file" "build-artifacts/$(basename "$file")"
+            found=1
+          done < <(find .theos -type f -name '*.dylib' -print0 2>/dev/null)
+
+          if [ -d packages ]; then
+            while IFS= read -r -d '' file; do
+              cp -f "$file" "build-artifacts/$(basename "$file")"
+              found=1
+            done < <(find packages -type f -name '*.deb' -print0 2>/dev/null)
+          fi
+
+          if [ "$found" -eq 0 ]; then
+            echo "ERROR: Build succeeded but no .dylib or .deb product was found."
+            echo "Files under .theos:"
+            find .theos -type f -print 2>/dev/null | sort || true
+            exit 1
+          fi
+
+          echo "=== Files that will be uploaded ==="
+          ls -lah build-artifacts
+
+      - name: Upload build products
+        uses: actions/upload-artifact@v6
+        with:
+          name: XsGpS-build
+          path: build-artifacts/
+          if-no-files-found: error
