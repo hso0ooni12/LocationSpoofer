@@ -1,13 +1,12 @@
 #import "MapPickerViewController+Private.h"
-#import "LocationSpoofer.h"
+#import "XsGpS.h"
 #import "BookmarksManager.h"
 #import "PersistenceManager.h"
 
 static NSString * const kLSBookmarksCell = @"LSBookmarksCell";
 
 typedef NS_ENUM(NSInteger, LSBookmarksSection) {
-    LSBookmarksSectionRecents = 0,
-    LSBookmarksSectionSaved = 1
+    LSBookmarksSectionSaved = 0
 };
 
 @implementation MapPickerViewController (LSBookmarksUI)
@@ -16,7 +15,7 @@ typedef NS_ENUM(NSInteger, LSBookmarksSection) {
     self.bookmarksContainer = [[UIView alloc] init];
     self.bookmarksContainer.translatesAutoresizingMaskIntoConstraints = NO;
     self.bookmarksContainer.hidden = YES;
-    [self.controlPanel.contentView addSubview:self.bookmarksContainer];
+    [self.controlPanel addSubview:self.bookmarksContainer];
 
     self.bookmarksTableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped];
     self.bookmarksTableView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -48,16 +47,15 @@ typedef NS_ENUM(NSInteger, LSBookmarksSection) {
     [UIView animateWithDuration:duration animations:^{
         self.mapControlsContainer.alpha = mapTab ? 1.0 : 0.0;
         self.bookmarksContainer.alpha = mapTab ? 0.0 : 1.0;
-        self.coordinateModeSegment.alpha = mapTab ? 1.0 : 0.0;
-        self.searchBar.alpha = mapTab ? 1.0 : 0.0;
+        self.coordinateModeSegment.alpha = 0.0;
     } completion:^(BOOL finished) {
         (void)finished;
         self.mapControlsContainer.hidden = !mapTab;
         self.bookmarksContainer.hidden = mapTab;
-        self.coordinateModeSegment.hidden = !mapTab;
-        self.searchBar.hidden = !mapTab;
+        self.coordinateModeSegment.hidden = YES;
     }];
 
+    [self.bookmarksQuickButton setTitle:(mapTab ? @" المحفوظات" : @" رجوع للخريطة") forState:UIControlStateNormal];
     if (!mapTab) {
         [self.bookmarksTableView reloadData];
     } else {
@@ -71,7 +69,10 @@ typedef NS_ENUM(NSInteger, LSBookmarksSection) {
 }
 
 - (void)handleCoordinateModeChanged:(UISegmentedControl *)sender {
-    self.coordinateMode = (LSMapPickerCoordinateMode)sender.selectedSegmentIndex;
+    (void)sender;
+    self.coordinateMode = LSMapPickerCoordinateModeStatic;
+    self.coordinateModeSegment.hidden = YES;
+    self.coordinateModeSegment.alpha = 0.0;
     [self updateCoordinateModeVisibility];
 }
 
@@ -129,89 +130,49 @@ typedef NS_ENUM(NSInteger, LSBookmarksSection) {
 }
 
 - (NSInteger)ls_bookmarksNumberOfSections {
-    return 2;
+    return 1;
 }
 
 - (NSInteger)ls_bookmarksNumberOfRowsInSection:(NSInteger)section {
-    if (section == LSBookmarksSectionRecents) {
-        return (NSInteger)[PersistenceManager shared].recentLocations.count;
-    }
+    (void)section;
     return (NSInteger)[BookmarksManager shared].allBookmarks.count;
 }
 
 - (NSString *)ls_bookmarksTitleForHeaderInSection:(NSInteger)section {
-    if (section == LSBookmarksSectionRecents) {
-        return @"الأخيرة";
-    }
-    return @"المحفوظات";
+    (void)section;
+    return @"المواقع المحفوظة";
 }
 
 - (UITableViewCell *)ls_bookmarksCellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [self.bookmarksTableView dequeueReusableCellWithIdentifier:kLSBookmarksCell forIndexPath:indexPath];
-
-    CLLocationCoordinate2D coordinate = kCLLocationCoordinate2DInvalid;
-    NSString *title = @"الموقع";
-
-    if (indexPath.section == LSBookmarksSectionRecents) {
-        NSArray<NSDictionary *> *recents = [PersistenceManager shared].recentLocations;
-        if (indexPath.row < (NSInteger)recents.count) {
-            NSDictionary *entry = recents[indexPath.row];
-            coordinate = CLLocationCoordinate2DMake([entry[@"LSRecentLat"] doubleValue], [entry[@"LSRecentLon"] doubleValue]);
-            title = entry[@"LSRecentName"] ?: @"الموقع";
-        }
-        cell.accessoryView = nil;
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-    } else {
-        NSArray<LSBookmark *> *bookmarks = [BookmarksManager shared].allBookmarks;
-        if (indexPath.row < (NSInteger)bookmarks.count) {
-            LSBookmark *bookmark = bookmarks[indexPath.row];
-            coordinate = bookmark.coordinate;
-            title = bookmark.name;
-        }
-
-        UIButton *applyButton = [UIButton buttonWithType:UIButtonTypeSystem];
-        applyButton.frame = CGRectMake(0, 0, 64, 32);
-        [applyButton setTitle:@"تطبيق" forState:UIControlStateNormal];
-        applyButton.titleLabel.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightSemibold];
-        applyButton.tag = indexPath.row;
-        [applyButton addTarget:self action:@selector(ls_applyBookmarkFromButton:) forControlEvents:UIControlEventTouchUpInside];
-        cell.accessoryView = applyButton;
-        cell.accessoryType = UITableViewCellAccessoryNone;
-    }
+    NSArray<LSBookmark *> *bookmarks = [BookmarksManager shared].allBookmarks;
+    LSBookmark *bookmark = indexPath.row < (NSInteger)bookmarks.count ? bookmarks[(NSUInteger)indexPath.row] : nil;
 
     UIListContentConfiguration *content = [UIListContentConfiguration subtitleCellConfiguration];
-    content.text = title;
+    content.text = bookmark.name.length > 0 ? bookmark.name : @"موقع محفوظ";
     content.textProperties.font = [UIFont systemFontOfSize:16.0 weight:UIFontWeightSemibold];
-    if (CLLocationCoordinate2DIsValid(coordinate)) {
-        content.secondaryText = [NSString stringWithFormat:@"%.5f, %.5f", coordinate.latitude, coordinate.longitude];
-    }
+    content.secondaryText = bookmark ? [NSString stringWithFormat:@"%.5f, %.5f", bookmark.coordinate.latitude, bookmark.coordinate.longitude] : @"";
     content.secondaryTextProperties.font = [UIFont monospacedDigitSystemFontOfSize:12.0 weight:UIFontWeightRegular];
     content.secondaryTextProperties.color = UIColor.secondaryLabelColor;
+    content.image = [UIImage systemImageNamed:@"bookmark.fill"];
+    content.imageProperties.tintColor = UIColor.systemOrangeColor;
     cell.contentConfiguration = content;
+
+    UIButton *applyButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    applyButton.frame = CGRectMake(0, 0, 64, 32);
+    [applyButton setTitle:@"تطبيق" forState:UIControlStateNormal];
+    applyButton.titleLabel.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightSemibold];
+    applyButton.tag = indexPath.row;
+    [applyButton addTarget:self action:@selector(ls_applyBookmarkFromButton:) forControlEvents:UIControlEventTouchUpInside];
+    cell.accessoryView = applyButton;
+    cell.accessoryType = UITableViewCellAccessoryNone;
     return cell;
 }
 
 - (void)ls_bookmarksDidSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    CLLocationCoordinate2D coordinate = kCLLocationCoordinate2DInvalid;
-
-    if (indexPath.section == LSBookmarksSectionRecents) {
-        NSArray<NSDictionary *> *recents = [PersistenceManager shared].recentLocations;
-        if (indexPath.row < (NSInteger)recents.count) {
-            NSDictionary *entry = recents[indexPath.row];
-            coordinate = CLLocationCoordinate2DMake([entry[@"LSRecentLat"] doubleValue], [entry[@"LSRecentLon"] doubleValue]);
-        }
-    } else {
-        NSArray<LSBookmark *> *bookmarks = [BookmarksManager shared].allBookmarks;
-        if (indexPath.row < (NSInteger)bookmarks.count) {
-            coordinate = bookmarks[indexPath.row].coordinate;
-        }
-    }
-
-    if (!CLLocationCoordinate2DIsValid(coordinate)) {
-        return;
-    }
-
-    [self movePinToCoordinate:coordinate animated:YES];
+    NSArray<LSBookmark *> *bookmarks = [BookmarksManager shared].allBookmarks;
+    if (indexPath.row < 0 || indexPath.row >= (NSInteger)bookmarks.count) return;
+    [self movePinToCoordinate:bookmarks[(NSUInteger)indexPath.row].coordinate animated:YES];
 }
 
 - (BOOL)ls_bookmarksCanEditRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -343,7 +304,6 @@ typedef NS_ENUM(NSInteger, LSBookmarksSection) {
         [self presentViewController:alert animated:YES completion:nil];
         return;
     }
-    [store recordRecentCoordinate:bookmark.coordinate name:bookmark.name];
     [self playApplyHaptic];
     LSSetHooksBypassed(NO);
     [self dismissViewControllerAnimated:YES completion:nil];

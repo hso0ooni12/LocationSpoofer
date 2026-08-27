@@ -1,0 +1,34 @@
+إصلاحات UUID والتفعيل
+=====================
+
+1) تم تثبيت UUID التطبيق المطلوب للنسخ والتفعيل:
+   6bb0cdeeb3574c5aa7fd6fb6179c8df0
+
+2) زر النسخ لم يعد ينسخ identifierForVendor بصيغة مثل:
+   80834385-9AC7-4012-AA5A-C2506E334348
+   بل ينسخ UUID التطبيق بصيغة 32 خانة بدون شرطات.
+
+3) تم توحيد قراءة/حفظ UUID بين LSAppIdentifierProvider و PersistenceManager:
+   - يقبل UUID بصيغة 32 خانة بدون شرطات.
+   - ويقبل صيغة NSUUID ذات الشرطات.
+   - يحفظ الصيغة المناسبة للنسخ، والصيغة المناسبة لـ identifierForVendor hook.
+
+4) تم إصلاح استمرار التفعيل بعد إعادة فتح التطبيق:
+   - LSActivationManager يستخدم UUID التطبيق الثابت بدل IDFV المتغير.
+   - بيانات التفعيل تُحفظ وتُقرأ من suite defaults و standard defaults كنسخة احتياطية.
+   - التحقق يدعم الرموز القديمة المخزنة على device id سابق لتقليل طلب التفعيل مرة ثانية.
+
+الملفات المعدلة:
+- LSAppIdentifierProvider.h
+- LSAppIdentifierProvider.m
+- LSActivationManager.m
+- MapPickerViewController.m
+- LSSettingsViewController.m
+- UUIDManagerViewController.m
+- PersistenceManager.m
+
+تحديث زر التعبئة:
+- زر "تعبئة" الآن يقرأ UUID مباشرة من الحافظة فقط.
+- يتم تطبيع UUID إلى صيغة 32 خانة بدون شرطات، ثم حفظه كبديل للـ UUID الأساسي داخل مفاتيح الأداة.
+- يتم تحديث الحافظة بنفس الصيغة المعتمدة بعد الحفظ.
+- بعد نجاح الحفظ تظهر رسالة واحدة وزر "إعادة التشغيل الآن" لإغلاق التطبيق حتى يتم فتحه من جديد وتُطبّق قيمة UUID الجديدة.

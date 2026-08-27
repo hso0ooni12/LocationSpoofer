@@ -1,5 +1,6 @@
 #import "RouteSimulator.h"
 #import <os/lock.h>
+#import <math.h>
 
 @implementation LSRoutePoint
 @end
@@ -86,8 +87,11 @@
             return 4.167;
         case LSTransportModeDriving:
             return 13.889;
-        case LSTransportModeCustom:
-            return customSpeedKmh / 3.6;
+        case LSTransportModeCustom: {
+            double safeKmh = isfinite(customSpeedKmh) ? customSpeedKmh : 30.0;
+            safeKmh = MAX(1.0, MIN(safeKmh, 300.0));
+            return safeKmh / 3.6;
+        }
     }
     return 1.389;
 }
@@ -107,9 +111,12 @@
 }
 
 - (void)startWithRoute:(MKRoute *)route {
+    [self startWithPolyline:route.polyline];
+}
+
+- (void)startWithPolyline:(MKPolyline *)polyline {
     [self stop];
 
-    MKPolyline *polyline = route.polyline;
     NSUInteger pointCount = polyline.pointCount;
     if (!polyline || pointCount < 2) {
         return;
@@ -125,22 +132,42 @@
     NSMutableArray<LSRoutePoint *> *points = [NSMutableArray arrayWithCapacity:pointCount];
     double cumulative = 0.0;
 
+    NSUInteger firstValidIndex = NSNotFound;
+    for (NSUInteger index = 0; index < pointCount; index++) {
+        if (CLLocationCoordinate2DIsValid(rawCoordinates[index])) {
+            firstValidIndex = index;
+            break;
+        }
+    }
+
+    if (firstValidIndex == NSNotFound) {
+        free(rawCoordinates);
+        return;
+    }
+
     LSRoutePoint *firstPoint = [[LSRoutePoint alloc] init];
-    firstPoint.coordinate = rawCoordinates[0];
+    firstPoint.coordinate = rawCoordinates[firstValidIndex];
     firstPoint.cumulativeDistance = 0.0;
     [points addObject:firstPoint];
 
-    for (NSUInteger index = 1; index < pointCount; index++) {
-        CLLocation *previous = [[CLLocation alloc] initWithLatitude:rawCoordinates[index - 1].latitude
-                                                          longitude:rawCoordinates[index - 1].longitude];
-        CLLocation *current = [[CLLocation alloc] initWithLatitude:rawCoordinates[index].latitude
-                                                       longitude:rawCoordinates[index].longitude];
+    CLLocationCoordinate2D previousValidCoordinate = rawCoordinates[firstValidIndex];
+    for (NSUInteger index = firstValidIndex + 1; index < pointCount; index++) {
+        CLLocationCoordinate2D currentCoordinate = rawCoordinates[index];
+        if (!CLLocationCoordinate2DIsValid(currentCoordinate)) {
+            continue;
+        }
+
+        CLLocation *previous = [[CLLocation alloc] initWithLatitude:previousValidCoordinate.latitude
+                                                          longitude:previousValidCoordinate.longitude];
+        CLLocation *current = [[CLLocation alloc] initWithLatitude:currentCoordinate.latitude
+                                                         longitude:currentCoordinate.longitude];
         cumulative += [current distanceFromLocation:previous];
 
         LSRoutePoint *point = [[LSRoutePoint alloc] init];
-        point.coordinate = rawCoordinates[index];
+        point.coordinate = currentCoordinate;
         point.cumulativeDistance = cumulative;
         [points addObject:point];
+        previousValidCoordinate = currentCoordinate;
     }
 
     if (points.count < 2 || cumulative <= 0.0) {
@@ -155,7 +182,7 @@
     self.currentSegmentIndex = 1;
     if (points.count >= 2) {
         self.currentHeading = [self headingFromCoordinate:((LSRoutePoint *)points[0]).coordinate
-                                               toCoordinate:((LSRoutePoint *)points[1]).coordinate];
+                                             toCoordinate:((LSRoutePoint *)points[1]).coordinate];
     }
     self.isSimulating = YES;
     self.isPaused = NO;
@@ -195,12 +222,19 @@
 }
 
 - (void)scheduleTickTimer {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self scheduleTickTimer];
+        });
+        return;
+    }
+
     [self.tickTimer invalidate];
-    self.tickTimer = [NSTimer scheduledTimerWithTimeInterval:0.1
-                                                      target:self
-                                                    selector:@selector(handleTick)
-                                                    userInfo:nil
-                                                     repeats:YES];
+    self.tickTimer = [NSTimer timerWithTimeInterval:0.1
+                                             target:self
+                                           selector:@selector(handleTick)
+                                           userInfo:nil
+                                            repeats:YES];
     [[NSRunLoop mainRunLoop] addTimer:self.tickTimer forMode:NSRunLoopCommonModes];
 }
 
@@ -272,6 +306,13 @@
 }
 
 - (void)notifyDelegateUpdate {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self notifyDelegateUpdate];
+        });
+        return;
+    }
+
     id<LSRouteSimulatorDelegate> delegate = self.delegate;
     if ([delegate respondsToSelector:@selector(routeSimulator:didUpdateCoordinate:heading:)]) {
         [delegate routeSimulator:self didUpdateCoordinate:self.currentCoordinate heading:self.currentHeading];

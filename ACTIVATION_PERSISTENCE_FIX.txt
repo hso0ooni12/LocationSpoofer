@@ -1,0 +1,12 @@
+Activation persistence fix
+
+- LSActivationManager now mirrors activation data to:
+  1) NSUserDefaults suite: com.xsgps.dylib
+  2) standard NSUserDefaults
+  3) a stable plist file: com.xsgps.activation.plist
+
+- On launch, the manager hydrates missing UserDefaults values from the plist file.
+- If the local activation token becomes stale because the injected environment or app UUID changed, the manager repairs the local token from the already-saved verified code/hash instead of asking for the activation code again.
+
+Edited file:
+- Source/LSActivationManager.m

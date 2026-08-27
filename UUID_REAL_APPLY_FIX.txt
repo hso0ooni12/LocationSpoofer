@@ -1,0 +1,15 @@
+تعديل تطبيق UUID بشكل أعمق
+
+التعديلات:
+1) تم تعديل Hook الخاص بـ identifierForVendor ليقرأ UUID من LSAppIdentifierProvider مباشرة، وليس من NSUserDefaults فقط.
+   السبب: سابقاً قد تعرض الواجهة UUID جديد لكن الهوك لا يقرأه فعلياً بعد تنظيف ملفات التطبيق.
+
+2) تم إضافة تنظيف Keychain عند الضغط على إعادة التشغيل الآن.
+   السبب: كثير من التطبيقات تحفظ installation id أو session id داخل Keychain، وهذا لا ينحذف بحذف Documents/Library/Caches.
+
+3) تم إضافة تنظيف WebKit website data بجانب Cookies/Cache.
+
+4) تم إضافة Security و WebKit للـ Makefile.
+
+ملاحظة مهمة:
+إذا كان التطبيق يربط الحساب أو الجهاز من السيرفر، أو يعتمد على رقم هاتف/حساب/جلسة سيرفر، فلن يكون UUID وحده كافياً.

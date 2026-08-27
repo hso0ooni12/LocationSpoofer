@@ -1,8 +1,11 @@
 #import "PersistenceManager.h"
+#import "LSAppIdentifierProvider.h"
 #import <os/lock.h>
+#import <UIKit/UIKit.h>
+#import <objc/runtime.h>
 
 // Plaintext NSUserDefaults in the host sandbox; readable by the host process and device backups.
-static NSString * const kSuiteName = @"com.locationspoofer.dylib";
+static NSString * const kSuiteName = @"com.xsgps.dylib";
 static NSString * const kKeyEnabled = @"spoof_enabled";
 static NSString * const kKeyLatitude = @"spoof_latitude";
 static NSString * const kKeyLongitude = @"spoof_longitude";
@@ -18,6 +21,9 @@ static NSString * const kRecentNameKey = @"LSRecentName";
 static NSString * const kRecentDateKey = @"LSRecentDate";
 static const NSUInteger kLSMaxRecentLocations = 5;
 
+// المفتاح الجديد الخاص بحفظ الـ UUID المخصص
+static NSString * const kKeyCustomAppUUID = @"Custom_App_UUID";
+
 @interface PersistenceManager () {
     os_unfair_lock _lock;
 }
@@ -32,6 +38,9 @@ static const NSUInteger kLSMaxRecentLocations = 5;
 @property (nonatomic, assign) double cachedFluctuationRadius;
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *cachedRecents;
 @property (nonatomic, assign) BOOL recentsLoaded;
+
+// متغير كاش للمعرف المخصص
+@property (nonatomic, strong) NSString *cachedCustomAppUUID;
 @end
 
 @implementation PersistenceManager
@@ -60,6 +69,7 @@ static const NSUInteger kLSMaxRecentLocations = 5;
         _cachedFluctuationEnabled = NO;
         _cachedFluctuationRadius = 50.0;
         _cachedRecents = [NSMutableArray array];
+        _cachedCustomAppUUID = nil;
     }
     return self;
 }
@@ -92,6 +102,8 @@ static const NSUInteger kLSMaxRecentLocations = 5;
     self.cachedHeading = [self.defaults doubleForKey:kKeyHeading];
     self.cachedFluctuationEnabled = [self.defaults boolForKey:kKeyFluctuationEnabled];
     self.cachedFluctuationRadius = [self.defaults doubleForKey:kKeyFluctuationRadius];
+    self.cachedCustomAppUUID = [self.defaults stringForKey:kKeyCustomAppUUID];
+    
     if (self.cachedFluctuationRadius <= 0.0) {
         self.cachedFluctuationRadius = 50.0;
     }
@@ -218,6 +230,34 @@ static const NSUInteger kLSMaxRecentLocations = 5;
     os_unfair_lock_unlock(&_lock);
 }
 
+// دالات الـ المضافة لسهولة استدعاء الـ UUID المخصص في لوحة التحكم
+- (id)objectForKey:(NSString *)defaultName {
+    os_unfair_lock_lock(&_lock);
+    id val = [self.defaults objectForKey:defaultName];
+    os_unfair_lock_unlock(&_lock);
+    return val;
+}
+
+- (void)setObject:(id)value forKey:(NSString *)defaultName {
+    os_unfair_lock_lock(&_lock);
+    [self.defaults setObject:value forKey:defaultName];
+    if ([defaultName isEqualToString:kKeyCustomAppUUID]) {
+        self.cachedCustomAppUUID = value;
+    }
+    [self.defaults synchronize];
+    os_unfair_lock_unlock(&_lock);
+}
+
+- (void)removeObjectForKey:(NSString *)defaultName {
+    os_unfair_lock_lock(&_lock);
+    [self.defaults removeObjectForKey:defaultName];
+    if ([defaultName isEqualToString:kKeyCustomAppUUID]) {
+        self.cachedCustomAppUUID = nil;
+    }
+    [self.defaults synchronize];
+    os_unfair_lock_unlock(&_lock);
+}
+
 - (NSArray<NSDictionary *> *)recentLocations {
     os_unfair_lock_lock(&_lock);
     [self reloadRecentsLocked];
@@ -230,24 +270,42 @@ static const NSUInteger kLSMaxRecentLocations = 5;
     os_unfair_lock_lock(&_lock);
     [self reloadRecentsLocked];
 
-        static NSISO8601DateFormatter *formatter = nil;
-        static dispatch_once_t onceToken;
-        dispatch_once(&onceToken, ^{
-            formatter = [[NSISO8601DateFormatter alloc] init];
-        });
+    static NSISO8601DateFormatter *formatter = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        formatter = [[NSISO8601DateFormatter alloc] init];
+    });
 
-        NSDictionary *entry = @{
-            kRecentLatitudeKey: @(coordinate.latitude),
-            kRecentLongitudeKey: @(coordinate.longitude),
-            kRecentNameKey: name.length > 0 ? name : @"الموقع",
-            kRecentDateKey: [formatter stringFromDate:[NSDate date]]
-        };
+    NSDictionary *entry = @{
+        kRecentLatitudeKey: @(coordinate.latitude),
+        kRecentLongitudeKey: @(coordinate.longitude),
+        kRecentNameKey: name.length > 0 ? name : @"الموقع",
+        kRecentDateKey: [formatter stringFromDate:[NSDate date]]
+    };
 
-        [self.cachedRecents insertObject:entry atIndex:0];
-        while (self.cachedRecents.count > kLSMaxRecentLocations) {
-            [self.cachedRecents removeLastObject];
-        }
+    [self.cachedRecents insertObject:entry atIndex:0];
+    while (self.cachedRecents.count > kLSMaxRecentLocations) {
+        [self.cachedRecents removeLastObject];
+    }
+    [self.defaults setObject:[self.cachedRecents copy] forKey:kKeyRecentLocations];
+    os_unfair_lock_unlock(&_lock);
+}
+
+- (void)removeRecentLocationAtIndex:(NSUInteger)index {
+    os_unfair_lock_lock(&_lock);
+    [self reloadRecentsLocked];
+    if (index < self.cachedRecents.count) {
+        [self.cachedRecents removeObjectAtIndex:index];
         [self.defaults setObject:[self.cachedRecents copy] forKey:kKeyRecentLocations];
+    }
+    os_unfair_lock_unlock(&_lock);
+}
+
+- (void)clearRecentLocations {
+    os_unfair_lock_lock(&_lock);
+    [self.cachedRecents removeAllObjects];
+    self.recentsLoaded = YES;
+    [self.defaults removeObjectForKey:kKeyRecentLocations];
     os_unfair_lock_unlock(&_lock);
 }
 
@@ -284,6 +342,63 @@ static const NSUInteger kLSMaxRecentLocations = 5;
     [self.defaults removeObjectForKey:kKeyLongitude];
     [self.defaults setBool:NO forKey:kKeySimulationWasActive];
     os_unfair_lock_unlock(&_lock);
+}
+
+@end
+
+
+// ==========================================
+// هوم الـ Hook الذاتي لمعرف الجهاز (UUID) عبر الـ Runtime 
+// ==========================================
+@interface UIDevice (XsGpSUUIDHook)
+@end
+
+@implementation UIDevice (XsGpSUUIDHook)
+
++ (void)load {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        Class class = [self class];
+        SEL originalSelector = @selector(identifierForVendor);
+        SEL swizzledSelector = @selector(ls_customIdentifierForVendor);
+
+        Method originalMethod = class_getInstanceMethod(class, originalSelector);
+        Method swizzledMethod = class_getInstanceMethod(class, swizzledSelector);
+        if (!originalMethod || !swizzledMethod) {
+            return;
+        }
+
+        BOOL didAddMethod = class_addMethod(class, originalSelector,
+                                            method_getImplementation(swizzledMethod),
+                                            method_getTypeEncoding(swizzledMethod));
+
+        if (didAddMethod) {
+            class_replaceMethod(class, swizzledSelector,
+                                method_getImplementation(originalMethod),
+                                method_getTypeEncoding(originalMethod));
+        } else {
+            method_exchangeImplementations(originalMethod, swizzledMethod);
+        }
+    });
+}
+
+- (NSUUID *)ls_customIdentifierForVendor {
+    // القراءة الآن من LSAppIdentifierProvider نفسه، لأنه يحفظ UUID في أكثر من مخزن
+    // وليس من NSUserDefaults فقط. هذا يمنع حالة أن الواجهة تعرض UUID جديد
+    // بينما الهوك لا يقرأه فعليًا بعد تنظيف ملفات التطبيق.
+    if ([LSAppIdentifierProvider isReplacementIdentifierEnabled]) {
+        NSString *replacement = [LSAppIdentifierProvider replacementApplicationIdentifier];
+        NSString *hyphenated = [LSAppIdentifierProvider hyphenatedUUIDStringFromIdentifier:replacement ?: @""];
+        if (hyphenated.length > 0) {
+            NSUUID *customUUID = [[NSUUID alloc] initWithUUIDString:hyphenated];
+            if (customUUID) {
+                return customUUID;
+            }
+        }
+    }
+
+    // العودة للمعرف الأصلي للجهاز إن لم يوجد مخصص
+    return [self ls_customIdentifierForVendor];
 }
 
 @end

@@ -41,6 +41,7 @@ typedef NS_ENUM(NSInteger, LSTransportMode) {
 @property (nonatomic, readonly) CLLocationCoordinate2D destinationCoordinate;
 
 - (void)startWithRoute:(MKRoute *)route;
+- (void)startWithPolyline:(MKPolyline *)polyline;
 - (void)pause;
 - (void)resume;
 - (void)stop;

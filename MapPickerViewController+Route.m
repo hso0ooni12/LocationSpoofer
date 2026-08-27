@@ -22,31 +22,32 @@
     self.routeSpinner.hidesWhenStopped = YES;
     [container addSubview:self.routeSpinner];
 
-    self.transportModeSegment = [[UISegmentedControl alloc] initWithItems:@[@"مشي", @"Cycle", @"قيادة", @"مخصص"]];
+    self.transportModeSegment = [[UISegmentedControl alloc] initWithItems:@[@"مشي", @"سيارة", @"مخصص"]];
     self.transportModeSegment.translatesAutoresizingMaskIntoConstraints = NO;
-    self.transportModeSegment.selectedSegmentIndex = 0;
+    self.transportModeSegment.selectedSegmentIndex = 1;
     self.transportModeSegment.hidden = YES;
     [self.transportModeSegment addTarget:self action:@selector(handleTransportModeChanged:) forControlEvents:UIControlEventValueChanged];
     [container addSubview:self.transportModeSegment];
 
     self.customSpeedField = [[UITextField alloc] init];
     self.customSpeedField.translatesAutoresizingMaskIntoConstraints = NO;
-    self.customSpeedField.placeholder = @"Custom km/h";
+    self.customSpeedField.placeholder = @"السرعة المخصصة (كم/س)";
     self.customSpeedField.keyboardType = UIKeyboardTypeDecimalPad;
     self.customSpeedField.borderStyle = UITextBorderStyleRoundedRect;
-    self.customSpeedField.text = @"30";
+    self.customSpeedField.textAlignment = NSTextAlignmentCenter;
+    self.customSpeedField.text = @"";
     self.customSpeedField.hidden = YES;
     [self.customSpeedField addTarget:self action:@selector(textFieldDidChange:) forControlEvents:UIControlEventEditingChanged];
     [container addSubview:self.customSpeedField];
 
-    self.playRouteButton = [self ls_primaryButtonWithTitle:@"تشغيل" action:@selector(handlePlayRouteTapped)];
+    self.playRouteButton = [self ls_primaryButtonWithTitle:@"تفعيل الموقع المتحرك" action:@selector(handlePlayRouteTapped)];
     self.playRouteButton.hidden = YES;
     [container addSubview:self.playRouteButton];
 
     self.pauseRouteButton = [self ls_secondaryButtonWithTitle:@"إيقاف مؤقت" action:@selector(handlePauseRouteTapped)];
     self.pauseRouteButton.hidden = YES;
 
-    self.stopRouteButton = [self ls_secondaryButtonWithTitle:@"إيقاف" action:@selector(handleStopRouteTapped)];
+    self.stopRouteButton = [self ls_secondaryButtonWithTitle:@"إنهاء المسار" action:@selector(handleStopRouteTapped)];
     self.stopRouteButton.hidden = YES;
 
     self.routeActionRow = [[UIStackView alloc] initWithArrangedSubviews:@[self.pauseRouteButton, self.stopRouteButton]];
@@ -58,10 +59,10 @@
     [container addSubview:self.routeActionRow];
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.getRouteButton.heightAnchor constraintEqualToConstant:44.0],
-        [self.playRouteButton.heightAnchor constraintEqualToConstant:44.0],
-        [self.pauseRouteButton.heightAnchor constraintEqualToConstant:44.0],
-        [self.stopRouteButton.heightAnchor constraintEqualToConstant:44.0]
+        [self.getRouteButton.heightAnchor constraintEqualToConstant:50.0],
+        [self.playRouteButton.heightAnchor constraintEqualToConstant:50.0],
+        [self.pauseRouteButton.heightAnchor constraintEqualToConstant:46.0],
+        [self.stopRouteButton.heightAnchor constraintEqualToConstant:46.0]
     ]];
 
     self.customSpeedHeightConstraint = [self.customSpeedField.heightAnchor constraintEqualToConstant:0.0];
@@ -78,7 +79,7 @@
         [self.routeSpinner.centerXAnchor constraintEqualToAnchor:self.getRouteButton.centerXAnchor],
         [self.routeSpinner.centerYAnchor constraintEqualToAnchor:self.getRouteButton.centerYAnchor],
 
-        [self.transportModeSegment.topAnchor constraintEqualToAnchor:self.getRouteButton.bottomAnchor constant:10.0],
+        [self.transportModeSegment.topAnchor constraintEqualToAnchor:self.getRouteButton.bottomAnchor constant:8.0],
         [self.transportModeSegment.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
         [self.transportModeSegment.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
 
@@ -86,7 +87,7 @@
         [self.customSpeedField.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
         [self.customSpeedField.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
 
-        [self.playRouteButton.topAnchor constraintEqualToAnchor:self.customSpeedField.bottomAnchor constant:10.0],
+        [self.playRouteButton.topAnchor constraintEqualToAnchor:self.customSpeedField.bottomAnchor constant:8.0],
         [self.playRouteButton.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
         [self.playRouteButton.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
 
@@ -97,11 +98,16 @@
 }
 
 - (void)updateCoordinateModeVisibility {
-    BOOL routeMode = self.coordinateMode == LSMapPickerCoordinateModeRoute;
-    BOOL staticMode = !routeMode;
+    // الواجهة الحالية تعتمد على الموقع الثابت فقط؛ إخفاء مسار الحركة نهائياً.
+    self.coordinateMode = LSMapPickerCoordinateModeStatic;
+    self.coordinateModeSegment.hidden = YES;
+    self.coordinateModeSegment.alpha = 0.0;
+    BOOL routeMode = NO;
+    BOOL staticMode = YES;
 
-    self.getRouteButton.hidden = !routeMode;
-    BOOL hasRoute = self.fetchedRoute != nil;
+    BOOL hasRoute = self.routePolyline != nil;
+    BOOL hasEndpoints = self.startAnnotation != nil && self.destinationAnnotation != nil;
+    self.getRouteButton.hidden = !routeMode || !hasEndpoints || hasRoute || [[LSRouteSimulator shared] isSimulating];
     self.transportModeSegment.hidden = !routeMode || !hasRoute;
     self.playRouteButton.hidden = !routeMode || !hasRoute;
     self.routeActionRow.hidden = YES;
@@ -112,7 +118,7 @@
         }
         if (!self.startAnnotation) {
             self.routePlacementPhase = LSRoutePlacementPhaseStart;
-            self.mapHintLabel.text = @"  اضغط على الخريطة لتحديد بداية المسار  ";
+            self.mapHintLabel.text = @"  حدّد نقطة البداية من الخريطة  ";
         }
     } else {
         if (![[LSRouteSimulator shared] isSimulating]) {
@@ -142,6 +148,11 @@
 }
 
 - (void)ls_updateMapControlsBottomConstraint {
+    if (!self.mapControlsBottomStaticConstraint || !self.mapControlsBottomStaticNoStopConstraint ||
+        !self.mapControlsBottomRouteConstraint || !self.mapControlsBottomRouteEarlyConstraint) {
+        return;
+    }
+
     self.mapControlsBottomStaticConstraint.active = NO;
     self.mapControlsBottomStaticNoStopConstraint.active = NO;
     self.mapControlsBottomRouteConstraint.active = NO;
@@ -157,7 +168,7 @@
         return;
     }
 
-    if (self.fetchedRoute != nil || [[LSRouteSimulator shared] isSimulating]) {
+    if (self.routePolyline != nil || [[LSRouteSimulator shared] isSimulating]) {
         self.mapControlsBottomRouteConstraint.active = YES;
     } else {
         self.mapControlsBottomRouteEarlyConstraint.active = YES;
@@ -198,7 +209,7 @@
         }
         self.destinationAnnotation.coordinate = coordinate;
         self.routePlacementPhase = LSRoutePlacementPhaseStart;
-        self.mapHintLabel.text = @"  اضغط على الخريطة لتحريك نقطة البداية  ";
+        self.mapHintLabel.text = @"  يمكنك تعديل البداية أو النهاية من الخريطة  ";
     }
 
     self.fetchedRoute = nil;
@@ -206,33 +217,20 @@
         [self.mapView removeOverlay:self.routePolyline];
         self.routePolyline = nil;
     }
-    self.getRouteButton.hidden = NO;
+    self.getRouteButton.hidden = !(self.startAnnotation && self.destinationAnnotation);
     [self updateCoordinateModeVisibility];
 }
 
 - (MKDirectionsTransportType)ls_directionsTransportType {
-    switch (self.transportModeSegment.selectedSegmentIndex) {
-        case 1:
-        case 0:
-            return MKDirectionsTransportTypeWalking;
-        case 2:
-        case 3:
-            return MKDirectionsTransportTypeAutomobile;
-        default:
-            return MKDirectionsTransportTypeAutomobile;
-    }
+    return self.transportModeSegment.selectedSegmentIndex == 0 ? MKDirectionsTransportTypeWalking : MKDirectionsTransportTypeAutomobile;
 }
 
 - (LSTransportMode)ls_selectedTransportMode {
     switch (self.transportModeSegment.selectedSegmentIndex) {
-        case 0:
-            return LSTransportModeWalking;
+        case 0: return LSTransportModeWalking;
+        case 2: return LSTransportModeCustom;
         case 1:
-            return LSTransportModeCycling;
-        case 2:
-            return LSTransportModeDriving;
-        default:
-            return LSTransportModeCustom;
+        default: return LSTransportModeDriving;
     }
 }
 
@@ -244,11 +242,17 @@
 
     self.getRouteButton.hidden = YES;
     [self.routeSpinner startAnimating];
+    self.statusLabel.text = @"جاري جلب المسار...";
 
+    [self ls_fetchRouteWithTransportType:[self ls_directionsTransportType] allowRetry:YES];
+}
+
+- (void)ls_fetchRouteWithTransportType:(MKDirectionsTransportType)transportType allowRetry:(BOOL)allowRetry {
     MKDirectionsRequest *request = [[MKDirectionsRequest alloc] init];
     request.source = [[MKMapItem alloc] initWithPlacemark:[[MKPlacemark alloc] initWithCoordinate:self.startAnnotation.coordinate]];
     request.destination = [[MKMapItem alloc] initWithPlacemark:[[MKPlacemark alloc] initWithCoordinate:self.destinationAnnotation.coordinate]];
-    request.transportType = [self ls_directionsTransportType];
+    request.transportType = transportType;
+    request.requestsAlternateRoutes = NO;
 
     MKDirections *directions = [[MKDirections alloc] initWithRequest:request];
     __weak typeof(self) weakSelf = self;
@@ -256,30 +260,80 @@
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
         dispatch_async(dispatch_get_main_queue(), ^{
-            [strongSelf.routeSpinner stopAnimating];
-
             if (error || response.routes.count == 0) {
-                [strongSelf playRouteFailureHaptic];
-                strongSelf.getRouteButton.hidden = NO;
-                strongSelf.statusLabel.text = @"فشل جلب المسار";
-                __weak typeof(strongSelf) innerWeakSelf = strongSelf;
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    [innerWeakSelf refreshStatusPill];
-                });
+                if (allowRetry && transportType != MKDirectionsTransportTypeAutomobile) {
+                    strongSelf.statusLabel.text = @"تعذر مسار المشي، نجرب القيادة...";
+                    [strongSelf ls_fetchRouteWithTransportType:MKDirectionsTransportTypeAutomobile allowRetry:NO];
+                    return;
+                }
+
+                [strongSelf.routeSpinner stopAnimating];
+                [strongSelf ls_buildAndShowDirectFallbackRouteWithMessage:@"تم إنشاء مسار مباشر" ];
                 return;
             }
 
-            [strongSelf playRouteSuccessHaptic];
+            [strongSelf.routeSpinner stopAnimating];
             strongSelf.fetchedRoute = response.routes.firstObject;
-            if (strongSelf.routePolyline) {
-                [strongSelf.mapView removeOverlay:strongSelf.routePolyline];
-            }
-            strongSelf.routePolyline = strongSelf.fetchedRoute.polyline;
-            [strongSelf.mapView addOverlay:strongSelf.routePolyline];
-            [strongSelf.mapView setVisibleMapRect:strongSelf.routePolyline.boundingMapRect edgePadding:UIEdgeInsetsMake(48, 48, 48, 48) animated:YES];
-            [strongSelf updateCoordinateModeVisibility];
+            [strongSelf ls_applyFetchedRoutePolyline:strongSelf.fetchedRoute.polyline statusMessage:@"تم جلب المسار"];
         });
     }];
+}
+
+- (void)ls_applyFetchedRoutePolyline:(MKPolyline *)polyline statusMessage:(NSString *)message {
+    if (!polyline || polyline.pointCount < 2) {
+        [self ls_buildAndShowDirectFallbackRouteWithMessage:@"تم إنشاء مسار مباشر"];
+        return;
+    }
+
+    [self playRouteSuccessHaptic];
+    if (self.routePolyline) {
+        [self.mapView removeOverlay:self.routePolyline];
+    }
+    self.routePolyline = polyline;
+    [self.mapView addOverlay:self.routePolyline];
+    [self.mapView setVisibleMapRect:self.routePolyline.boundingMapRect edgePadding:UIEdgeInsetsMake(48, 48, 48, 48) animated:YES];
+    self.statusLabel.text = message;
+    [self updateCoordinateModeVisibility];
+}
+
+- (BOOL)ls_buildAndShowDirectFallbackRouteWithMessage:(NSString *)message {
+    if (!self.startAnnotation || !self.destinationAnnotation) {
+        [self playRouteFailureHaptic];
+        self.getRouteButton.hidden = NO;
+        self.statusLabel.text = @"اختر بداية ووجهة للمسار";
+        return NO;
+    }
+
+    CLLocationCoordinate2D start = self.startAnnotation.coordinate;
+    CLLocationCoordinate2D end = self.destinationAnnotation.coordinate;
+    if (!CLLocationCoordinate2DIsValid(start) || !CLLocationCoordinate2DIsValid(end)) {
+        [self playRouteFailureHaptic];
+        self.getRouteButton.hidden = NO;
+        self.statusLabel.text = @"نقاط المسار غير صالحة";
+        return NO;
+    }
+
+    const NSUInteger count = 64;
+    CLLocationCoordinate2D *coords = malloc(sizeof(CLLocationCoordinate2D) * count);
+    if (!coords) {
+        [self playRouteFailureHaptic];
+        self.getRouteButton.hidden = NO;
+        self.statusLabel.text = @"تعذر إنشاء المسار";
+        return NO;
+    }
+
+    for (NSUInteger index = 0; index < count; index++) {
+        double progress = (double)index / (double)(count - 1);
+        coords[index] = CLLocationCoordinate2DMake(start.latitude + ((end.latitude - start.latitude) * progress),
+                                                   start.longitude + ((end.longitude - start.longitude) * progress));
+    }
+
+    MKPolyline *fallbackPolyline = [MKPolyline polylineWithCoordinates:coords count:count];
+    free(coords);
+
+    self.fetchedRoute = nil;
+    [self ls_applyFetchedRoutePolyline:fallbackPolyline statusMessage:message];
+    return YES;
 }
 
 - (void)handleTransportModeChanged:(UISegmentedControl *)sender {
@@ -296,12 +350,22 @@
 }
 
 - (void)ls_updateCustomSpeedVisibility {
-    self.customSpeedField.hidden = self.transportModeSegment.hidden || self.transportModeSegment.selectedSegmentIndex != 3;
-    self.customSpeedHeightConstraint.constant = self.customSpeedField.hidden ? 0.0 : 40.0;
+    if (!self.transportModeSegment || !self.customSpeedField || !self.customSpeedHeightConstraint) {
+        return;
+    }
+
+    BOOL custom = self.transportModeSegment.selectedSegmentIndex == 2;
+    self.customSpeedField.hidden = !custom;
+    self.customSpeedHeightConstraint.constant = custom ? 40.0 : 0.0;
+    if (custom && self.customSpeedField.text.length == 0) {
+        self.customSpeedField.text = @"30";
+    }
 }
 
 - (void)handlePlayRouteTapped {
-    if (!self.fetchedRoute) {
+    if (!self.routePolyline || self.routePolyline.pointCount < 2) {
+        [self playRouteFailureHaptic];
+        self.statusLabel.text = @"المسار غير جاهز";
         return;
     }
 
@@ -326,7 +390,7 @@
     }
     [PersistenceManager shared].simulationWasActive = YES;
 
-    [simulator startWithRoute:self.fetchedRoute];
+    [simulator startWithPolyline:self.routePolyline];
     [self ls_updateRoutePlaybackButtons];
     [self refreshStatusPill];
 }
@@ -362,8 +426,8 @@
 - (void)ls_updateRoutePlaybackButtons {
     LSRouteSimulator *simulator = [LSRouteSimulator shared];
     if (!simulator.isSimulating) {
-        [self.playRouteButton setTitle:@"تشغيل" forState:UIControlStateNormal];
-        self.playRouteButton.hidden = self.fetchedRoute == nil || self.coordinateMode != LSMapPickerCoordinateModeRoute;
+        [self.playRouteButton setTitle:@"تفعيل الموقع المتحرك" forState:UIControlStateNormal];
+        self.playRouteButton.hidden = self.routePolyline == nil || self.coordinateMode != LSMapPickerCoordinateModeRoute;
         self.routeActionRow.hidden = YES;
         return;
     }
@@ -379,20 +443,17 @@
 - (void)restoreSimulationUIIfNeeded {
     LSRouteSimulator *simulator = [LSRouteSimulator shared];
     if (simulator.isSimulating) {
-        [self restoreRouteUIFromSimulator];
-        return;
+        [simulator stop];
     }
 
-    if (![PersistenceManager shared].simulationWasActive) {
-        return;
+    if ([PersistenceManager shared].simulationWasActive) {
+        [PersistenceManager shared].simulationWasActive = NO;
     }
 
-    [PersistenceManager shared].simulationWasActive = NO;
-    self.statusLabel.text = @"انتهت جلسة المسار السابقة";
-    __weak typeof(self) weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [weakSelf refreshStatusPill];
-    });
+    self.coordinateMode = LSMapPickerCoordinateModeStatic;
+    self.coordinateModeSegment.hidden = YES;
+    self.coordinateModeSegment.alpha = 0.0;
+    [self updateCoordinateModeVisibility];
 }
 
 - (void)restoreRouteUIFromSimulator {
@@ -442,9 +503,10 @@
     self.getRouteButton.hidden = YES;
     switch (simulator.transportMode) {
         case LSTransportModeWalking: self.transportModeSegment.selectedSegmentIndex = 0; break;
-        case LSTransportModeCycling: self.transportModeSegment.selectedSegmentIndex = 1; break;
-        case LSTransportModeDriving: self.transportModeSegment.selectedSegmentIndex = 2; break;
-        case LSTransportModeCustom: self.transportModeSegment.selectedSegmentIndex = 3; break;
+        case LSTransportModeCustom: self.transportModeSegment.selectedSegmentIndex = 2; break;
+        case LSTransportModeCycling:
+        case LSTransportModeDriving:
+        default: self.transportModeSegment.selectedSegmentIndex = 1; break;
     }
     self.transportModeSegment.hidden = NO;
     [self ls_updateCustomSpeedVisibility];
@@ -456,10 +518,20 @@
 #pragma mark - LSRouteSimulatorDelegate
 
 - (void)routeSimulator:(LSRouteSimulator *)simulator didUpdateCoordinate:(CLLocationCoordinate2D)coordinate heading:(CLLocationDirection)heading {
-    (void)heading;
+    if (!CLLocationCoordinate2DIsValid(coordinate)) {
+        return;
+    }
+
+    PersistenceManager *store = [PersistenceManager shared];
+    [store setSpoofCoordinate:coordinate enabled:YES];
+    store.heading = heading;
+    store.simulationWasActive = YES;
+
     double kmh = [LSRouteSimulator speedMetersPerSecondForMode:simulator.transportMode customSpeedKmh:simulator.customSpeedKmh] * 3.6;
-    self.statusLabel.text = [NSString stringWithFormat:@"محاكاة · %.1f كم/س", kmh];
+    self.statusLabel.text = @"تغيير الموقع مفعل ✅";
     self.statusDot.backgroundColor = UIColor.systemGreenColor;
+    self.subtitleLabel.text = [NSString stringWithFormat:@"سرعة الحركة %.1f كم/س", kmh];
+    self.subtitleLabel.hidden = NO;
 
     self.selectedCoordinate = coordinate;
     self.startAnnotation.coordinate = coordinate;

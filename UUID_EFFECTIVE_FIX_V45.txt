@@ -1,0 +1,31 @@
+UUID Effective Apply Fix V45
+============================
+
+ما تم إصلاحه:
+1) إصلاح البناء:
+   - Makefile لم يعد يعتمد فقط على Source/*.m.
+   - يبني من ملفات .m الموجودة في جذر المشروع أولاً، حتى لو كان Source القديم موجوداً، لتجنب بناء ملفات قديمة.
+   - GitHub Actions يحذف Source القديم ثم ينسخ ملفات الجذر إليه حتى لا تُبنى ملفات قديمة.
+
+2) تطبيق UUID فعلياً:
+   - بعد زر تعبئة يتم حفظ UUID في مخزن الأداة الثابت.
+   - تمت إضافة تحقق مباشر بأن identifierForVendor داخل العملية الحالية يقرأ UUID الجديد.
+   - إذا كان التطبيق قد قرأ UUID القديم قبل التغيير، زر إعادة التشغيل الآن ينظف البيانات ثم يغلق التطبيق ليقرأ UUID الجديد عند الفتح القادم.
+
+3) تنظيف بيانات التطبيق عند إعادة التشغيل:
+   - تم نقل التنظيف إلى LSUUIDResetManager ليستفيد منه زر تعبئة في الشاشة الرئيسية وصفحة إدارة UUID.
+   - التنظيف يشمل Documents و Library و tmp و Cookies و WebKit storage و URL cache و Keychain الخاص بالتطبيق المستضيف.
+   - يتم الحفاظ على ملفات الأداة com.xsgps حتى لا يضيع UUID البديل أو التفعيل.
+
+ملاحظة مهمة:
+إذا كان التطبيق يربط المستخدم من جهة السيرفر بحساب، رقم هاتف، توكن جلسة، أو بصمة أخرى غير identifierForVendor، فلن يكفي UUID وحده. هذا الإصلاح يجعل identifierForVendor وبيانات التطبيق المحلية تتجدد، لكنه لا يستطيع تغيير ربط موجود داخل سيرفر خارجي.
+
+ملفات مضافة/معدلة:
+- LSUUIDResetManager.h
+- LSUUIDResetManager.m
+- LSAppIdentifierProvider.h
+- LSAppIdentifierProvider.m
+- MapPickerViewController.m
+- UUIDManagerViewController.m
+- Makefile
+- .github/workflows/main.yml

@@ -1,0 +1,18 @@
+UUID restart data clean fix
+
+التعديل:
+- عند الضغط على زر "تعبئة" يتم حفظ UUID البديل بشكل ثابت.
+- عند الضغط على "إعادة التشغيل الآن" يتم تنظيف بيانات التطبيق المستضيف قبل الإغلاق:
+  Documents
+  Library/Caches
+  Library/Application Support
+  Library/WebKit
+  Library/Cookies
+  Library/HTTPStorages
+  tmp
+  وملفات Preferences الخاصة بالتطبيق.
+- يتم الحفاظ على ملفات الأداة الخاصة بـ com.xsgps حتى لا يضيع التفعيل أو UUID البديل بعد التنظيف.
+- تمت إضافة مخزن ثابت للـ UUID باسم com.xsgps.uuid.plist بجانب مخزن التفعيل.
+
+ملاحظة:
+التنظيف مخصص لبيانات التطبيق المستضيف فقط، ولا يحذف ملفات النظام أو ملفات خارج نطاق التطبيق/الأداة.

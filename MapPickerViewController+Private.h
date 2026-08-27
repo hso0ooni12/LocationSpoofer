@@ -28,15 +28,23 @@ typedef NS_ENUM(NSInteger, LSRoutePlacementPhase) {
 
 @interface MapPickerViewController ()
 
+@property (nonatomic, strong) UIView *floatingPanelView;
+@property (nonatomic, strong) UIView *floatingGrabberView;
 @property (nonatomic, strong) UIView *headerView;
 @property (nonatomic, strong) UILabel *titleLabel;
 @property (nonatomic, strong) UILabel *subtitleLabel;
+@property (nonatomic, strong) UIImageView *navigationIconView;
 @property (nonatomic, strong) UIView *statusPill;
 @property (nonatomic, strong) UIView *statusDot;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIButton *closeButton;
 @property (nonatomic, strong) UILabel *pillStopLabel;
 @property (nonatomic, strong) UISearchBar *searchBar;
+@property (nonatomic, strong) UIStackView *quickActionsRow;
+@property (nonatomic, strong) UIButton *bookmarksQuickButton;
+@property (nonatomic, strong) UIStackView *mapToolsRow;
+@property (nonatomic, strong) UIButton *locateMeButton;
+@property (nonatomic, strong) UISegmentedControl *mapTypeSegment;
 @property (nonatomic, strong) UIActivityIndicatorView *searchSpinner;
 @property (nonatomic, strong) MKLocalSearchCompleter *searchCompleter;
 @property (nonatomic, strong) NSArray<MKLocalSearchCompletion *> *searchCompletions;
@@ -51,11 +59,12 @@ typedef NS_ENUM(NSInteger, LSRoutePlacementPhase) {
 @property (nonatomic, strong) MKMapView *mapView;
 @property (nonatomic, strong) UILabel *mapHintLabel;
 @property (nonatomic, strong) UIActivityIndicatorView *mapSpinner;
-@property (nonatomic, strong) UIVisualEffectView *controlPanel;
+@property (nonatomic, strong) UIView *controlPanel;
 @property (nonatomic, strong) UISegmentedControl *panelTabSegment;
 @property (nonatomic, strong) UISegmentedControl *coordinateModeSegment;
+@property (nonatomic, strong) NSLayoutConstraint *panelTabHeightConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *coordinateModeHeightConstraint;
 @property (nonatomic, strong) UIView *mapControlsContainer;
-@property (nonatomic, strong) UIStackView *mapControlsStack;
 @property (nonatomic, strong) UIView *staticControlsContainer;
 @property (nonatomic, strong) UIView *routeControlsContainer;
 @property (nonatomic, strong) UIView *bookmarksContainer;
@@ -66,13 +75,6 @@ typedef NS_ENUM(NSInteger, LSRoutePlacementPhase) {
 @property (nonatomic, strong) UIView *separatorCoordFields;
 @property (nonatomic, strong) UIView *separatorFieldsHeading;
 @property (nonatomic, strong) UIView *separatorHeadingActions;
-@property (nonatomic, strong) UIView *separatorFluctuation;
-@property (nonatomic, strong) UIView *fluctuationRow;
-@property (nonatomic, strong) UILabel *fluctuationLabel;
-@property (nonatomic, strong) UISwitch *fluctuationSwitch;
-@property (nonatomic, strong) UITextField *fluctuationRadiusField;
-@property (nonatomic, strong) NSLayoutConstraint *fluctuationRadiusHeightConstraint;
-@property (nonatomic, strong) NSLayoutConstraint *fluctuationRadiusTopConstraint;
 @property (nonatomic, strong) UIStackView *fieldStack;
 @property (nonatomic, strong) UITextField *latitudeField;
 @property (nonatomic, strong) UITextField *longitudeField;
@@ -83,7 +85,7 @@ typedef NS_ENUM(NSInteger, LSRoutePlacementPhase) {
 @property (nonatomic, strong) UIButton *applyButton;
 @property (nonatomic, strong) UIButton *cancelButton;
 @property (nonatomic, strong) UIButton *stopButton;
-@property (nonatomic, strong) UIStackView *actionRow;
+@property (nonatomic, strong) UIView *actionRow;
 @property (nonatomic, strong) NSLayoutConstraint *stopButtonHeightConstraint;
 @property (nonatomic, strong) NSLayoutConstraint *mapControlsBottomStaticConstraint;
 @property (nonatomic, strong) NSLayoutConstraint *mapControlsBottomStaticNoStopConstraint;
@@ -112,6 +114,48 @@ typedef NS_ENUM(NSInteger, LSRoutePlacementPhase) {
 @property (nonatomic, assign) LSMapPickerCoordinateMode coordinateMode;
 @property (nonatomic, assign) BOOL bookmarksEditMode;
 
+
+// Core helpers used by MapPickerViewController.m
+- (BOOL)ls_presentActivationIfNeeded;
+- (void)configureKeyboardToolbar;
+- (void)configureMapIfNeeded;
+- (UIView *)ls_separatorView;
+- (UIView *)coordinateFieldWithTitle:(NSString *)title placeholder:(NSString *)placeholder textField:(UITextField **)textField;
+- (UIButton *)primaryButtonWithTitle:(NSString *)title action:(SEL)action;
+- (UIButton *)secondaryButtonWithTitle:(NSString *)title action:(SEL)action;
+- (UIButton *)destructiveOutlineButtonWithTitle:(NSString *)title action:(SEL)action;
+- (void)handleStatusPillTapped;
+- (void)handleToolsCenterTapped;
+- (void)handleApply;
+- (void)handleCancel;
+- (void)ls_dismissToolPanelAnimatedDown;
+- (void)handleStopSpoofing;
+- (void)handleBookmarksQuickTapped;
+- (void)handleLocateMeTapped;
+- (void)handleRestoreOriginalLocationTapped;
+- (BOOL)ls_shouldShowUserLocationWhileSpoofingDisabled;
+- (void)handleMapTypeChanged:(UISegmentedControl *)sender;
+- (void)textFieldDidChange:(UITextField *)textField;
+- (void)ls_keyboardWillShow:(NSNotification *)notification;
+- (void)ls_keyboardWillHide:(NSNotification *)notification;
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText;
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar;
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView;
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section;
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath;
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath;
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section;
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section;
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath;
+- (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath;
+- (BOOL)tableView:(UITableView *)tableView canMoveRowAtIndexPath:(NSIndexPath *)indexPath;
+- (void)tableView:(UITableView *)tableView moveRowAtIndexPath:(NSIndexPath *)sourceIndexPath toIndexPath:(NSIndexPath *)destinationIndexPath;
+- (void)completerDidUpdateResults:(MKLocalSearchCompleter *)completer;
+- (void)completer:(MKLocalSearchCompleter *)completer didFailWithError:(NSError *)error;
+- (MKAnnotationView *)mapView:(MKMapView *)mapView viewForAnnotation:(id<MKAnnotation>)annotation;
+- (MKOverlayRenderer *)mapView:(MKMapView *)mapView rendererForOverlay:(id<MKOverlay>)overlay;
+- (void)mapView:(MKMapView *)mapView annotationView:(MKAnnotationView *)view didChangeDragState:(MKAnnotationViewDragState)newState fromOldState:(MKAnnotationViewDragState)oldState;
+
 - (void)refreshStatusPill;
 - (void)syncFieldsFromCoordinate;
 - (void)updateCoordinateLabel;
@@ -131,6 +175,27 @@ typedef NS_ENUM(NSInteger, LSRoutePlacementPhase) {
 - (void)handleMapTap:(UITapGestureRecognizer *)gesture;
 - (void)handleMapLongPress:(UILongPressGestureRecognizer *)gesture;
 - (void)handleHeadingSliderChanged:(UISlider *)sender;
+
+// Extra route/bookmark helpers implemented in category files.
+- (void)ls_clearRouteAnnotationsAndOverlay;
+- (MKDirectionsTransportType)ls_directionsTransportType;
+- (LSTransportMode)ls_selectedTransportMode;
+- (void)ls_updateCustomSpeedVisibility;
+- (void)ls_updateRoutePlaybackButtons;
+- (UIButton *)ls_primaryButtonWithTitle:(NSString *)title action:(SEL)action;
+- (UIButton *)ls_secondaryButtonWithTitle:(NSString *)title action:(SEL)action;
+
+- (BOOL)ls_buildAndShowDirectFallbackRouteWithMessage:(NSString *)message;
+- (void)ls_applyFetchedRoutePolyline:(MKPolyline *)polyline statusMessage:(NSString *)message;
+- (void)ls_fetchRouteWithTransportType:(MKDirectionsTransportType)transportType allowRetry:(BOOL)allowRetry;
+- (void)handleGetRouteTapped;
+- (void)handleTransportModeChanged:(UISegmentedControl *)sender;
+- (void)handlePlayRouteTapped;
+- (void)handlePauseRouteTapped;
+- (void)handleStopRouteTapped;
+- (void)ls_handleBookmarksLongPress:(UILongPressGestureRecognizer *)gesture;
+- (void)ls_toggleBookmarksEditMode;
+- (void)ls_applyBookmarkFromButton:(UIButton *)sender;
 
 @end
 

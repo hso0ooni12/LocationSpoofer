@@ -1,6 +1,6 @@
 #import "BookmarksManager.h"
 
-static NSString * const kSuiteName = @"com.locationspoofer.dylib";
+static NSString * const kSuiteName = @"com.xsgps.dylib";
 static NSString * const kBookmarksKey = @"LSBookmarks";
 static NSString * const kBookmarkNameKey = @"LSBMName";
 static NSString * const kBookmarkLatitudeKey = @"LSBMLat";

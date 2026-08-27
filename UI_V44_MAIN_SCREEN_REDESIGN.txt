@@ -1,0 +1,4 @@
+v44 main screen redesign
+- Primary MapPickerViewController contains the complete visual dashboard.
+- The separate LSToolsCenter is no longer presented from the main UI.
+- Fixed stray Objective-C syntax markers in scheduler and Bluetooth log manager.

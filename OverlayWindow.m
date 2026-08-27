@@ -1,12 +1,12 @@
 #import "OverlayWindow.h"
-#import "LocationSpoofer.h"
+#import "XsGpS.h"
 #import "MapPickerViewController.h"
 #import "LSHooking.h"
 
 #import <objc/runtime.h>
 #import <os/log.h>
 
-static const NSTimeInterval kLSThreeFingerHoldDuration = 0.8;
+static const NSTimeInterval kLSThreeFingerHoldDuration = 0.45;
 static const NSTimeInterval kLSPresentationWatchdogInterval = 2.0;
 static NSHashTable *ls_sendEventSwizzledClasses = nil;
 static dispatch_once_t ls_sendEventTablesOnceToken;
@@ -17,7 +17,7 @@ static BOOL ls_mapPickerVisible = NO;
 static os_log_t ls_overlayLog = NULL;
 
 #if DEBUG
-#define LSAssertMainThread() NSCAssert([NSThread isMainThread], @"LocationSpoofer overlay UI state must change on main thread")
+#define LSAssertMainThread() NSCAssert([NSThread isMainThread], @"XsGpS overlay UI state must change on main thread")
 #else
 #define LSAssertMainThread()
 #endif
@@ -37,7 +37,7 @@ static void LSUpdateThreeFingerHoldForEvent(UIEvent *event);
 static void LSInitializeSendEventTables(void) {
     dispatch_once(&ls_sendEventTablesOnceToken, ^{
         ls_sendEventSwizzledClasses = [NSHashTable weakObjectsHashTable];
-        ls_overlayLog = os_log_create("com.locationspoofer.dylib", "overlay");
+        ls_overlayLog = os_log_create("com.xsgps.dylib", "overlay");
     });
 }
 
@@ -310,17 +310,9 @@ static UIViewController *LSHostTopViewController(void) {
     ls_isPresentingMapPicker = YES;
 
     MapPickerViewController *mapPicker = [[MapPickerViewController alloc] init];
-    mapPicker.modalPresentationStyle = UIModalPresentationPageSheet;
-
-    if (@available(iOS 15.0, *)) {
-        UISheetPresentationController *sheet = mapPicker.sheetPresentationController;
-        if (sheet) {
-            sheet.detents = @[[UISheetPresentationControllerDetent largeDetent]];
-            sheet.prefersGrabberVisible = YES;
-            sheet.preferredCornerRadius = 24.0;
-            sheet.widthFollowsPreferredContentSizeWhenEdgeAttached = YES;
-        }
-    }
+    mapPicker.modalPresentationStyle = UIModalPresentationOverFullScreen;
+    mapPicker.modalTransitionStyle = UIModalTransitionStyleCoverVertical;
+    mapPicker.preferredContentSize = UIScreen.mainScreen.bounds.size;
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kLSPresentationWatchdogInterval * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
@@ -330,7 +322,7 @@ static UIViewController *LSHostTopViewController(void) {
         }
     });
 
-    [hostController presentViewController:mapPicker animated:YES completion:^{
+    [hostController presentViewController:mapPicker animated:NO completion:^{
         LSAssertMainThread();
         ls_isPresentingMapPicker = NO;
     }];

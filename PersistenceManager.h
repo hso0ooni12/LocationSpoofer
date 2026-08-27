@@ -21,9 +21,14 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (NSArray<NSDictionary *> *)recentLocations;
 - (void)recordRecentCoordinate:(CLLocationCoordinate2D)coordinate name:(nullable NSString *)name;
+- (void)removeRecentLocationAtIndex:(NSUInteger)index;
+- (void)clearRecentLocations;
 
 - (BOOL)setSpoofCoordinate:(CLLocationCoordinate2D)coordinate enabled:(BOOL)enabled;
 - (void)clearSpoof;
+- (id)objectForKey:(NSString *)defaultName;
+- (void)setObject:(id)value forKey:(NSString *)defaultName;
+- (void)removeObjectForKey:(NSString *)defaultName;
 
 @end
 
