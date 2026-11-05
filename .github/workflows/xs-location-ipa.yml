@@ -1,0 +1,92 @@
+name: XS Location 2.0 — IPA
+
+on:
+  push:
+    branches: [xs-location-v2]
+    paths:
+      - xs/XS-Location.patch
+      - .github/workflows/xs-location-ipa.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 50
+    steps:
+      - name: Checkout XS Location overlay
+        uses: actions/checkout@v4
+
+      - name: Fetch pinned open-source Locus engine
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/ElProfessorFRidg/locus.git Engine
+          git -C Engine fetch --depth 1 origin e0bee53a83adad848a7b178793c0fbe199ae37fb
+          git -C Engine checkout --detach e0bee53a83adad848a7b178793c0fbe199ae37fb
+
+      - name: Apply XS Location UI and engine integration
+        run: |
+          set -euo pipefail
+          git -C Engine apply --check "$GITHUB_WORKSPACE/xs/XS-Location.patch"
+          git -C Engine apply "$GITHUB_WORKSPACE/xs/XS-Location.patch"
+          test -f Engine/Locus/Features/XS/XSRootView.swift
+          test -f Engine/Locus/Features/Settings/NetworkModeView.swift
+          test -f Engine/Vendor/idevice/libidevice_ffi.a
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew install xcodegen
+
+      - name: Generate the iOS project
+        working-directory: Engine
+        run: xcodegen generate
+
+      - name: Build unsigned iPhone app and VPN extension
+        working-directory: Engine
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project Locus.xcodeproj \
+            -scheme Locus \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/XS-Location.xcarchive \
+            CODE_SIGN_IDENTITY='' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_ENTITLEMENTS='' \
+            DEVELOPMENT_TEAM='' \
+            SKIP_INSTALL=NO
+
+      - name: Package and verify XS Location IPA
+        working-directory: Engine
+        run: |
+          set -euo pipefail
+          APP='build/XS-Location.xcarchive/Products/Applications/Locus.app'
+          test -f "$APP/Locus"
+          test -f "$APP/PlugIns/LocusTunnel.appex/LocusTunnel"
+          test -f "$APP/PlugIns/LocusWidgets.appex/LocusWidgets"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$APP/Info.plist")" = 'XS Location'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$APP/PlugIns/LocusTunnel.appex/Info.plist")" = 'com.apple.networkextension.packet-tunnel'
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry XS-Location-unsigned.ipa Payload
+          unzip -t XS-Location-unsigned.ipa >/dev/null
+          ls -lh XS-Location-unsigned.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: XS-Location-unsigned-IPA
+          path: Engine/XS-Location-unsigned.ipa
+          retention-days: 30
+          if-no-files-found: error
