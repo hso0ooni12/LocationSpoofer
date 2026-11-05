@@ -1,0 +1,1316 @@
+diff --git a/.github/workflows/build-xs-ipa.yml b/.github/workflows/build-xs-ipa.yml
+new file mode 100644
+index 0000000..52f1152
+--- /dev/null
++++ b/.github/workflows/build-xs-ipa.yml
+@@ -0,0 +1,65 @@
++name: XS Location — Unsigned IPA
++
++on:
++  workflow_dispatch:
++
++permissions:
++  contents: read
++
++jobs:
++  ipa:
++    runs-on: macos-26
++    timeout-minutes: 45
++    steps:
++      - uses: actions/checkout@v4
++
++      - uses: maxim-lobanov/setup-xcode@v1
++        with:
++          xcode-version: latest-stable
++
++      - name: Install XcodeGen
++        env:
++          HOMEBREW_NO_AUTO_UPDATE: "1"
++        run: brew install xcodegen
++
++      - name: Generate native Xcode project
++        run: xcodegen generate
++
++      - name: Build both engines and extensions
++        run: |
++          set -euo pipefail
++          xcodebuild archive \
++            -project Locus.xcodeproj \
++            -scheme Locus \
++            -configuration Release \
++            -sdk iphoneos \
++            -destination 'generic/platform=iOS' \
++            -archivePath build/XS-Location.xcarchive \
++            CODE_SIGN_IDENTITY='' \
++            CODE_SIGNING_ALLOWED=NO \
++            CODE_SIGNING_REQUIRED=NO \
++            CODE_SIGN_ENTITLEMENTS='' \
++            DEVELOPMENT_TEAM='' \
++            SKIP_INSTALL=NO
++
++      - name: Package and verify unsigned IPA
++        run: |
++          set -euo pipefail
++          APP='build/XS-Location.xcarchive/Products/Applications/Locus.app'
++          test -f "$APP/Locus"
++          test -f "$APP/PlugIns/LocusTunnel.appex/LocusTunnel"
++          test -f "$APP/PlugIns/LocusWidgets.appex/LocusWidgets"
++          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$APP/Info.plist")" = 'XS Location'
++          test "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$APP/PlugIns/LocusTunnel.appex/Info.plist")" = 'com.apple.networkextension.packet-tunnel'
++          mkdir -p Payload
++          cp -R "$APP" Payload/
++          zip -qry XS-Location-unsigned.ipa Payload
++          unzip -t XS-Location-unsigned.ipa
++          ls -lh XS-Location-unsigned.ipa
++
++      - uses: actions/upload-artifact@v4
++        with:
++          name: XS-Location-unsigned-IPA
++          path: XS-Location-unsigned.ipa
++          if-no-files-found: error
++          retention-days: 30
+diff --git a/.github/workflows/build.yml b/.github/workflows/build.yml
+index 36c6e59..95dadb0 100644
+--- a/.github/workflows/build.yml
++++ b/.github/workflows/build.yml
+@@ -1,19 +1,9 @@
+ name: Build IPA
+ 
+ on:
+-  # Every branch, not just main: a branch you can't install from is a branch you
+-  # can't test on a phone, and this app only really works on one.
+-  #
+-  # No `pull_request:` trigger — a PR from a branch in this repo would build the
+-  # same commit twice, and the push event is the one that can publish.
+-  push:
+-    branches: ["**"]
+-    tags: ["v*"]
+-    # A push that only touches prose has nothing to build. (Path filters don't
+-    # apply to tag pushes, so a release tag always builds.)
+-    paths-ignore:
+-      - "**.md"
+-      - "LICENSE"
++  # Keep upstream's multi-format release workflow available on demand.
++  # XS Location uses build-xs-ipa.yml for a small read-only IPA build; a push
++  # must not automatically replace a repository's existing rolling Release.
+   workflow_dispatch:
+ 
+ permissions:
+diff --git a/AppIcon.icon/Assets/XSMark.svg b/AppIcon.icon/Assets/XSMark.svg
+new file mode 100644
+index 0000000..b4e142f
+--- /dev/null
++++ b/AppIcon.icon/Assets/XSMark.svg
+@@ -0,0 +1,15 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
++  <defs>
++    <linearGradient id="pin" x1="0%" x2="100%" y1="0%" y2="100%">
++      <stop offset="0%" stop-color="#7CCCF6"/>
++      <stop offset="55%" stop-color="#5478F1"/>
++      <stop offset="100%" stop-color="#2C56CF"/>
++    </linearGradient>
++  </defs>
++  <circle cx="512" cy="456" r="284" fill="#173265" opacity="0.46"/>
++  <circle cx="512" cy="456" r="244" fill="#203F77" opacity="0.70"/>
++  <path d="M 512,167 C 346,167 226,294 226,452 C 226,627 427,816 495,874 C 505,882 520,882 530,874 C 597,816 798,627 798,452 C 798,294 678,167 512,167 Z" fill="url(#pin)"/>
++  <circle cx="512" cy="444" r="143" fill="#FFFFFF"/>
++  <circle cx="512" cy="444" r="84" fill="#20B898"/>
++  <circle cx="480" cy="411" r="23" fill="#91FFE4" opacity="0.65"/>
++</svg>
+diff --git a/AppIcon.icon/icon.json b/AppIcon.icon/icon.json
+index f9494b6..5bc8318 100644
+--- a/AppIcon.icon/icon.json
++++ b/AppIcon.icon/icon.json
+@@ -2,13 +2,13 @@
+   "fill-specializations" : [
+     {
+       "value" : {
+-        "solid" : "display-p3:0.88000,0.89000,0.91000,1.00000"
++        "solid" : "display-p3:0.05490,0.10196,0.21176,1.00000"
+       }
+     },
+     {
+       "appearance" : "dark",
+       "value" : {
+-        "solid" : "display-p3:0.02998,0.04497,0.04997,1.00000"
++        "solid" : "display-p3:0.02353,0.05098,0.12157,1.00000"
+       }
+     }
+   ],
+@@ -16,49 +16,17 @@
+     {
+       "layers" : [
+         {
+-          "image-name" : "PinRight.svg",
+-          "name" : "Pin Right"
++          "image-name" : "XSMark.svg",
++          "name" : "XS Location Pin"
+         }
+       ],
+       "shadow" : {
+         "kind" : "layer-color",
+-        "opacity" : 0.4
++        "opacity" : 0.26
+       },
+       "translucency" : {
+         "enabled" : true,
+-        "value" : 0.28
+-      }
+-    },
+-    {
+-      "layers" : [
+-        {
+-          "image-name" : "PinLeft.svg",
+-          "name" : "Pin Left"
+-        }
+-      ],
+-      "shadow" : {
+-        "kind" : "layer-color",
+-        "opacity" : 0.4
+-      },
+-      "translucency" : {
+-        "enabled" : true,
+-        "value" : 0.28
+-      }
+-    },
+-    {
+-      "layers" : [
+-        {
+-          "image-name" : "Loci.svg",
+-          "name" : "Two Places"
+-        }
+-      ],
+-      "shadow" : {
+-        "kind" : "neutral",
+-        "opacity" : 0.25
+-      },
+-      "translucency" : {
+-        "enabled" : true,
+-        "value" : 0.2
++        "value" : 0.12
+       }
+     }
+   ],
+@@ -68,4 +36,4 @@
+     ],
+     "squares" : "shared"
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/Locus/App/LocusApp.swift b/Locus/App/LocusApp.swift
+index d88bf8a..81a6575 100644
+--- a/Locus/App/LocusApp.swift
++++ b/Locus/App/LocusApp.swift
+@@ -7,48 +7,16 @@ struct LocusApp: App {
+     // pairing store the UI is showing.
+     @StateObject private var session = SpoofSession.shared
+     @StateObject private var pairing = PairingStore.shared
+-    @AppStorage(SetupGate.defaultsKey) private var setupComplete = false
+-    @AppStorage(LocusAppearance.defaultsKey) private var appearance = LocusAppearance.dark
+-    /// Which of the two interfaces opens. Pro by default, so an existing
+-    /// install lands exactly where it always did.
+-    @AppStorage(LocusInterfaceMode.defaultsKey) private var interface = LocusInterfaceMode.pro
+     @Environment(\.scenePhase) private var scenePhase
+ 
+-    /// Map when setup finished, or when already paired outside this walkthrough.
+-    private var showMap: Bool {
+-        setupComplete || (pairing.hasPairingFile && !SetupGate.isInProgress)
+-    }
+-
+     var body: some Scene {
+         WindowGroup {
+-            Group {
+-                if showMap {
+-                    switch interface {
+-                    case .pro: RootView()
+-                    case .fun: FunRootView()
+-                    }
+-                } else {
+-                    SetupFlowView(initialStep: SetupGate.initialStep(hasPairingFile: pairing.hasPairingFile)) {
+-                        SetupGate.markComplete()
+-                        setupComplete = true
+-                    }
+-                }
+-            }
++            XSRootView()
+             .environmentObject(session)
+             .environmentObject(pairing)
+-            // `nil` for .system, which hands the choice back to iOS. Fun mode
+-            // has one palette and it is a night one — a light map under those
+-            // colours is a different app with the lights left on.
+-            .preferredColorScheme(interface == .fun ? .dark : appearance.colorScheme)
+             .onOpenURL { url in
+                 handleIncoming(url)
+             }
+-            .onAppear {
+-                if !setupComplete, pairing.hasPairingFile, !SetupGate.isInProgress {
+-                    SetupGate.markComplete()
+-                    setupComplete = true
+-                }
+-            }
+             .onChange(of: scenePhase) { _, phase in
+                 // Profile edits are coalesced while a slider is moving. Leaving
+                 // the foreground is the moment that window has to close.
+diff --git a/Locus/Engine/InterceptIdentity.swift b/Locus/Engine/InterceptIdentity.swift
+index c6ea2e6..35597ad 100644
+--- a/Locus/Engine/InterceptIdentity.swift
++++ b/Locus/Engine/InterceptIdentity.swift
+@@ -117,7 +117,7 @@ final class InterceptIdentity: ObservableObject {
+         let leaf = try X509Builder.certificate(
+             role: .server(dnsNames: hosts),
+             serial: Self.randomSerial(),
+-            subjectCN: "Locus Location Host",
++            subjectCN: "XS Location Host",
+             issuerCN: authorityName,
+             notBefore: notBefore,
+             notAfter: now.addingTimeInterval(TimeInterval(Self.leafDays) * 86_400),
+diff --git a/Locus/Engine/PairingStore.swift b/Locus/Engine/PairingStore.swift
+index b8c411f..d906679 100644
+--- a/Locus/Engine/PairingStore.swift
++++ b/Locus/Engine/PairingStore.swift
+@@ -20,7 +20,7 @@ final class PairingStore: ObservableObject {
+                 types.append(t)
+             }
+         }
+-        if let custom = UTType("com.chrismack.locus.rppairing") {
++        if let custom = UTType("com.hso0ooni.xslocation.rppairing") {
+             types.append(custom)
+         }
+         return types
+diff --git a/Locus/Features/XS/XSRootView.swift b/Locus/Features/XS/XSRootView.swift
+new file mode 100644
+index 0000000..d519008
+--- /dev/null
++++ b/Locus/Features/XS/XSRootView.swift
+@@ -0,0 +1,741 @@
++import CoreLocation
++import MapKit
++import SwiftUI
++import UniformTypeIdentifiers
++
++/// XS Location deliberately has only two user-facing methods.  The underlying
++/// Locus engines remain intact; this is a guided front end, not a fake demo.
++struct XSRootView: View {
++    @EnvironmentObject private var session: SpoofSession
++    @EnvironmentObject private var pairing: PairingStore
++    @Environment(\.scenePhase) private var scenePhase
++
++    @StateObject private var network = NetworkSpoofer.shared
++    @StateObject private var identity = InterceptIdentity.shared
++
++    @AppStorage("xs.language") private var language = "ar"
++    @AppStorage("xs.satellite") private var satellite = false
++    @State private var method: SpoofBackend = .developer
++    @State private var camera = MapCameraPosition.region(
++        MKCoordinateRegion(
++            center: CLLocationCoordinate2D(latitude: 25.38, longitude: 49.59),
++            span: MKCoordinateSpan(latitudeDelta: 0.055, longitudeDelta: 0.055)
++        )
++    )
++    @State private var searchText = ""
++    @State private var searching = false
++    @State private var searchError: String?
++    @State private var showImporter = false
++    @State private var showNetworkSetup = false
++    @State private var showAdvanced = false
++    @State private var vpnUp = TunnelController.loopbackReachable
++
++    @FocusState private var searchFocused: Bool
++
++    private let blue = Color(red: 0.22, green: 0.38, blue: 0.88)
++    private let mint = Color(red: 0.07, green: 0.65, blue: 0.52)
++    private var ar: Bool { language == "ar" }
++    private func tr(_ arabic: String, _ english: String) -> String { ar ? arabic : english }
++    private var locked: Bool { session.isSpoofing || session.isBusy }
++    private var chosenLocation: CLLocationCoordinate2D? { session.pin }
++    private var surface: Color { Color(uiColor: .secondarySystemGroupedBackground) }
++
++    var body: some View {
++        NavigationStack {
++            ZStack {
++                Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
++                ScrollView(showsIndicators: false) {
++                    VStack(alignment: .leading, spacing: 19) {
++                        header
++                        introduction
++                        methodSelector
++                        mapCard
++                        setupCard
++                        limitationNote
++                    }
++                    .padding(.horizontal, 19)
++                    .padding(.top, 12)
++                    .padding(.bottom, 28)
++                }
++            }
++            .toolbar(.hidden, for: .navigationBar)
++            .safeAreaInset(edge: .bottom, spacing: 0) { actionBar }
++            .environment(\.layoutDirection, ar ? .rightToLeft : .leftToRight)
++            .sheet(isPresented: $showNetworkSetup) { XSCertificateView(arabic: ar) }
++            .sheet(isPresented: $showAdvanced) { XSAdvancedView(arabic: ar) }
++            .fileImporter(
++                isPresented: $showImporter,
++                allowedContentTypes: PairingStore.supportedTypes,
++                allowsMultipleSelection: false
++            ) { result in
++                switch result {
++                case .success(let urls):
++                    guard let url = urls.first else { return }
++                    do { try pairing.importPairing(from: url) }
++                    catch { pairing.lastError = error.localizedDescription }
++                case .failure(let error):
++                    pairing.lastError = error.localizedDescription
++                }
++            }
++            .alert(tr("تعذّر إكمال العملية", "Couldn't finish"), isPresented: Binding(
++                get: { session.lastError != nil || pairing.lastError != nil || searchError != nil },
++                set: { if !$0 { session.lastError = nil; pairing.lastError = nil; searchError = nil } }
++            )) {
++                Button(tr("حسناً", "OK"), role: .cancel) {
++                    session.lastError = nil
++                    pairing.lastError = nil
++                    searchError = nil
++                }
++            } message: {
++                Text(session.lastError ?? pairing.lastError ?? searchError ?? "")
++            }
++            .onAppear { initialize() }
++            .onChange(of: scenePhase) { _, phase in
++                if phase == .active { refresh() }
++            }
++            .onReceive(NotificationCenter.default.publisher(for: .locusOpenLocation)) { notification in
++                guard let link = notification.object as? LocusLocationLink else { return }
++                showOnMap(link.match.coordinate)
++                if link.teleports, !locked {
++                    SpoofBackend.current = method
++                    session.teleport(to: link.match.coordinate, pairing: pairing)
++                }
++            }
++        }
++    }
++
++    // MARK: - Identity & method selection
++
++    private var header: some View {
++        HStack(spacing: 12) {
++            ZStack {
++                RoundedRectangle(cornerRadius: 17, style: .continuous)
++                    .fill(LinearGradient(colors: [blue, mint], startPoint: .topLeading, endPoint: .bottomTrailing))
++                Image(systemName: "location.north.circle.fill")
++                    .font(.system(size: 27, weight: .medium))
++                    .foregroundStyle(.white)
++            }
++            .frame(width: 52, height: 52)
++
++            VStack(alignment: .leading, spacing: 2) {
++                Text("XS Location")
++                    .font(.system(size: 23, weight: .bold, design: .rounded))
++                Text(tr("موقعك، على كيفك", "Choose where to test"))
++                    .font(.system(size: 12, weight: .medium))
++                    .foregroundStyle(.secondary)
++            }
++            Spacer(minLength: 5)
++            Button {
++                language = ar ? "en" : "ar"
++            } label: {
++                Text(ar ? "EN" : "عربي")
++                    .font(.system(size: 13, weight: .semibold))
++                    .frame(minWidth: 43, minHeight: 37)
++                    .background(surface, in: Capsule())
++            }
++            .buttonStyle(.plain)
++            .accessibilityLabel(tr("تغيير اللغة", "Change language"))
++        }
++    }
++
++    private var introduction: some View {
++        HStack(spacing: 12) {
++            VStack(alignment: .leading, spacing: 8) {
++                Text(tr("اختر الطريقة المناسبة لجهازك", "Pick the best method for your iPhone"))
++                    .font(.system(size: 19, weight: .bold, design: .rounded))
++                    .fixedSize(horizontal: false, vertical: true)
++                Text(tr("طريقتان، وخطوات واضحة. تقدر تغيّر الاختيار قبل تشغيل الموقع.",
++                        "Two methods, one clear setup. Switch methods before starting."))
++                    .font(.subheadline)
++                    .foregroundStyle(.secondary)
++                    .fixedSize(horizontal: false, vertical: true)
++            }
++            Spacer(minLength: 0)
++            statusBadge
++        }
++    }
++
++    private var statusBadge: some View {
++        let pendingNetwork = method == .network && session.isSpoofing && !network.hasTakenEffect
++        let label = session.isBusy ? tr("جاري العمل", "Working")
++            : pendingNetwork ? tr("بانتظار النظام", "Waiting for iOS")
++            : session.isSpoofing ? tr("نشط", "Active") : tr("متوقف", "Off")
++        let color = session.isSpoofing && !pendingNetwork ? mint : pendingNetwork ? Color.orange : Color.secondary
++        return HStack(spacing: 5) {
++            Circle().fill(color).frame(width: 7, height: 7)
++            Text(label).font(.system(size: 11, weight: .semibold))
++        }
++        .padding(.horizontal, 10)
++        .padding(.vertical, 9)
++        .background(surface, in: Capsule())
++        .fixedSize()
++    }
++
++    private var methodSelector: some View {
++        VStack(alignment: .leading, spacing: 10) {
++            sectionTitle(tr("طريقة التشغيل", "Connection method"), symbol: "square.stack.3d.up")
++            HStack(spacing: 10) {
++                methodCard(
++                    .developer,
++                    title: tr("LocalDevVPN", "LocalDevVPN"),
++                    subtitle: tr("الموقع الكامل", "System location"),
++                    explanation: tr("يتطلب Pairing", "Requires Pairing"),
++                    symbol: "iphone.gen3.radiowaves.left.and.right"
++                )
++                methodCard(
++                    .network,
++                    title: tr("Network", "Network"),
++                    subtitle: tr("واي فاي وأبراج", "Wi-Fi & cellular"),
++                    explanation: tr("بدون Pairing", "No Pairing file"),
++                    symbol: "network"
++                )
++            }
++        }
++    }
++
++    private func methodCard(_ candidate: SpoofBackend, title: String, subtitle: String, explanation: String, symbol: String) -> some View {
++        let chosen = method == candidate
++        return Button {
++            guard !locked else { return }
++            method = candidate
++            SpoofBackend.current = candidate
++            refresh()
++        } label: {
++            VStack(alignment: .leading, spacing: 7) {
++                HStack {
++                    Image(systemName: symbol)
++                        .font(.system(size: 20, weight: .medium))
++                        .foregroundStyle(chosen ? blue : Color.secondary)
++                    Spacer()
++                    Image(systemName: chosen ? "checkmark.circle.fill" : "circle")
++                        .foregroundStyle(chosen ? blue : Color(uiColor: .tertiaryLabel))
++                }
++                .padding(.bottom, 4)
++                Text(title)
++                    .font(.system(size: 16, weight: .bold, design: .rounded))
++                    .foregroundStyle(.primary)
++                    .lineLimit(1)
++                    .minimumScaleFactor(0.8)
++                Text(subtitle)
++                    .font(.system(size: 12, weight: .semibold))
++                    .foregroundStyle(.primary)
++                Text(explanation)
++                    .font(.system(size: 11))
++                    .foregroundStyle(.secondary)
++            }
++            .frame(maxWidth: .infinity, alignment: .leading)
++            .padding(15)
++            .background(chosen ? blue.opacity(0.07) : surface, in: RoundedRectangle(cornerRadius: 20))
++            .overlay {
++                RoundedRectangle(cornerRadius: 20)
++                    .strokeBorder(chosen ? blue.opacity(0.7) : Color.clear, lineWidth: 1.5)
++            }
++        }
++        .buttonStyle(.plain)
++        .disabled(locked)
++        .accessibilityAddTraits(chosen ? .isSelected : [])
++    }
++
++    // MARK: - Map
++
++    private var mapCard: some View {
++        VStack(alignment: .leading, spacing: 12) {
++            HStack {
++                sectionTitle(tr("حدد المكان", "Choose a location"), symbol: "mappin.circle")
++                Spacer()
++                Button {
++                    satellite.toggle()
++                } label: {
++                    Label(satellite ? tr("عادية", "Standard") : tr("قمر صناعي", "Satellite"),
++                          systemImage: satellite ? "map" : "globe.europe.africa")
++                        .font(.system(size: 12, weight: .semibold))
++                }
++                .buttonStyle(.plain)
++            }
++
++            HStack(spacing: 8) {
++                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
++                TextField(tr("ابحث عن مدينة أو عنوان", "Search a city or address"), text: $searchText)
++                    .textInputAutocapitalization(.never)
++                    .autocorrectionDisabled()
++                    .submitLabel(.search)
++                    .focused($searchFocused)
++                    .onSubmit { Task { await searchPlace() } }
++                    .font(.subheadline)
++                if searching { ProgressView().controlSize(.small) }
++                else if !searchText.isEmpty {
++                    Button { Task { await searchPlace() } } label: {
++                        Image(systemName: "arrow.up.circle.fill")
++                            .font(.system(size: 23))
++                            .foregroundStyle(blue)
++                    }
++                    .accessibilityLabel(tr("بحث", "Search"))
++                }
++            }
++            .padding(.horizontal, 13)
++            .frame(height: 46)
++            .background(Color(uiColor: .tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
++
++            MapReader { mapProxy in
++                Map(position: $camera) {
++                    if let chosenLocation {
++                        Annotation(tr("المكان المختار", "Selected"), coordinate: chosenLocation) {
++                            Image(systemName: "mappin.circle.fill")
++                                .symbolRenderingMode(.palette)
++                                .foregroundStyle(.white, blue)
++                                .font(.system(size: 37))
++                                .shadow(color: .black.opacity(0.2), radius: 5, y: 3)
++                        }
++                    }
++                }
++                .mapStyle(satellite ? .imagery : .standard)
++                .mapControls { MapCompass() }
++                .onTapGesture(coordinateSpace: .local) { point in
++                    guard let coordinate = mapProxy.convert(point, from: .local) else { return }
++                    searchFocused = false
++                    session.setPin(coordinate)
++                }
++            }
++            .frame(height: 265)
++            .clipShape(RoundedRectangle(cornerRadius: 18))
++            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.primary.opacity(0.05)))
++
++            HStack(spacing: 9) {
++                Image(systemName: chosenLocation == nil ? "hand.tap" : "location.fill")
++                    .foregroundStyle(blue)
++                VStack(alignment: .leading, spacing: 3) {
++                    Text(chosenLocation == nil ? tr("اضغط على الخريطة لتحديد موقع", "Tap the map to drop a pin")
++                         : session.pinAddress ?? tr("الموقع المختار", "Selected location"))
++                        .font(.system(size: 12, weight: .semibold))
++                        .lineLimit(2)
++                    if let coordinate = chosenLocation {
++                        Text(String(format: "%.6f, %.6f", coordinate.latitude, coordinate.longitude))
++                            .font(.system(size: 11, design: .monospaced))
++                            .foregroundStyle(.secondary)
++                            .environment(\.layoutDirection, .leftToRight)
++                    }
++                }
++                Spacer(minLength: 0)
++            }
++            .padding(.vertical, 4)
++        }
++        .padding(15)
++        .background(surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
++    }
++
++    // MARK: - Guided setup
++
++    private var setupCard: some View {
++        VStack(alignment: .leading, spacing: 14) {
++            sectionTitle(tr("التجهيز — خطوة بخطوة", "Setup — step by step"), symbol: "list.number")
++            if method == .developer {
++                setupRow(1, title: tr("أضف ملف Pairing", "Import a pairing file"),
++                         description: pairing.hasPairingFile ? tr("الملف موجود", "File imported") : tr("اختر ملف الجهاز من تطبيق الملفات", "Choose this device's pairing file"),
++                         success: pairing.hasPairingFile) {
++                    Button(tr(pairing.hasPairingFile ? "استبدال" : "اختيار الملف", pairing.hasPairingFile ? "Replace" : "Choose file")) {
++                        showImporter = true
++                    }
++                    .buttonStyle(.bordered)
++                    .controlSize(.small)
++                }
++                setupRow(2, title: tr("شغّل LocalDevVPN", "Connect LocalDevVPN"),
++                         description: vpnUp ? tr("النفق المحلي جاهز", "Local tunnel is available") : tr("حمّل التطبيق من App Store واتصل", "Install from App Store and connect"),
++                         success: vpnUp) {
++                    Button(tr("فتح VPN", "Open VPN")) { LocalDevVPN.openOrInstall() }
++                        .buttonStyle(.bordered)
++                        .controlSize(.small)
++                }
++                setupRow(3, title: tr("اختر الموقع ثم ابدأ", "Choose a pin and start"),
++                         description: tr("تغيّر خدمة المحاكاة موقع النظام للتطبيقات المتوافقة", "The developer service simulates system location for compatible apps"),
++                         success: session.isSpoofing) { EmptyView() }
++            } else {
++                setupRow(1, title: tr("تحقق من صلاحية VPN", "Check VPN capability"),
++                         description: TunnelController.staticBlocker == nil
++                             ? tr("صلاحية الاتصال المدمج قيد التحقق", "Built-in tunnel capability can be tested")
++                             : tr("التوقيع ما يتيح تشغيل النفق المدمج", "Current signature can't run the built-in tunnel"),
++                         success: TunnelController.staticBlocker == nil) { EmptyView() }
++                setupRow(2, title: tr("ثبّت شهادة الاتصال", "Install network certificate"),
++                         description: identity.trust == .trusted ? tr("الشهادة موثوقة", "Certificate trusted") : tr("التثبيت والثقة من إعدادات iOS", "Install and trust it in iOS Settings"),
++                         success: identity.trust == .trusted) {
++                    Button(tr("إعداد الشهادة", "Certificate setup")) { showNetworkSetup = true }
++                        .buttonStyle(.bordered)
++                        .controlSize(.small)
++                }
++                setupRow(3, title: tr("افحص الاتصال", "Run connection checks"),
++                         description: tr("يفحص الشهادة والنفق وDNS والبروكسي", "Tests certificate, tunnel, DNS and proxy"),
++                         success: network.checks.count == 4 && network.checks.allSatisfy({
++                             if case .passed = $0 { return true }
++                             return false
++                         })) {
++                    Button(tr("فحص", "Test")) { Task { await network.runChecks() } }
++                        .buttonStyle(.bordered)
++                        .controlSize(.small)
++                        .disabled(network.isChecking || TunnelController.staticBlocker != nil)
++                }
++                if let failed = network.checks.first(where: { if case .failed = $0 { return true }; return false }),
++                   case .failed(let title, let detail) = failed {
++                    Text("\(title): \(detail)")
++                        .font(.caption)
++                        .foregroundStyle(.orange)
++                        .fixedSize(horizontal: false, vertical: true)
++                }
++            }
++            Button {
++                showAdvanced = true
++            } label: {
++                Label(tr("حالة الجهاز والتفاصيل", "Device status and details"), systemImage: "info.circle")
++                    .font(.system(size: 12, weight: .medium))
++            }
++            .buttonStyle(.plain)
++            .foregroundStyle(blue)
++        }
++        .padding(17)
++        .background(surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
++    }
++
++    private func setupRow<Accessory: View>(
++        _ number: Int, title: String, description: String, success: Bool,
++        @ViewBuilder accessory: () -> Accessory
++    ) -> some View {
++        HStack(alignment: .top, spacing: 12) {
++            ZStack {
++                Circle().fill(success ? mint.opacity(0.12) : blue.opacity(0.09))
++                if success { Image(systemName: "checkmark").foregroundStyle(mint) }
++                else { Text("\(number)").foregroundStyle(blue) }
++            }
++            .font(.system(size: 13, weight: .bold))
++            .frame(width: 30, height: 30)
++
++            VStack(alignment: .leading, spacing: 4) {
++                Text(title).font(.system(size: 14, weight: .semibold))
++                Text(description)
++                    .font(.system(size: 12))
++                    .foregroundStyle(.secondary)
++                    .fixedSize(horizontal: false, vertical: true)
++                accessory().padding(.top, 4)
++            }
++            Spacer(minLength: 0)
++        }
++        .frame(maxWidth: .infinity, alignment: .leading)
++    }
++
++    private var limitationNote: some View {
++        HStack(alignment: .top, spacing: 10) {
++            Image(systemName: "info.circle.fill").foregroundStyle(blue)
++            Text(method == .developer
++                 ? tr("محاكاة المطوّر تغيّر موقع النظام، لكن بعض التطبيقات قد تكتشف الموقع المحاكى أو ترفضه.",
++                      "Developer simulation changes system location, but some apps can detect or reject simulated fixes.")
++                 : tr("Network يغيّر تحديد الموقع عبر الواي فاي والأبراج فقط؛ قد يتغلب عليه GPS، وقد يحتاج iOS 26 إلى إعادة تشغيل بعد تغيير المكان.",
++                      "Network mode changes Wi-Fi/cell positioning only. GPS may override it and iOS 26 may need a restart to clear cached locations."))
++                .font(.system(size: 12))
++                .foregroundStyle(.secondary)
++                .fixedSize(horizontal: false, vertical: true)
++        }
++        .padding(13)
++    }
++
++    // MARK: - Actions
++
++    private var actionBar: some View {
++        HStack(spacing: 10) {
++            if session.isSpoofing {
++                Button {
++                    session.stop(pairing: pairing)
++                } label: {
++                    Label(tr("إيقاف واستعادة الموقع", "Stop and restore location"), systemImage: "stop.fill")
++                        .frame(maxWidth: .infinity)
++                        .frame(height: 52)
++                }
++                .buttonStyle(.borderedProminent)
++                .tint(Color(red: 0.83, green: 0.29, blue: 0.34))
++            } else {
++                Button {
++                    guard let chosenLocation else { return }
++                    SpoofBackend.current = method
++                    session.teleport(to: chosenLocation, pairing: pairing)
++                } label: {
++                    HStack(spacing: 9) {
++                        if session.isBusy { ProgressView().tint(.white) }
++                        else { Image(systemName: "location.fill") }
++                        Text(tr("تفعيل الموقع المختار", "Start location simulation"))
++                    }
++                    .font(.system(size: 15, weight: .bold))
++                    .frame(maxWidth: .infinity)
++                    .frame(height: 52)
++                }
++                .buttonStyle(.borderedProminent)
++                .tint(blue)
++                .disabled(session.isBusy || chosenLocation == nil)
++            }
++        }
++        .padding(.horizontal, 19)
++        .padding(.top, 12)
++        .padding(.bottom, 8)
++        .background(.regularMaterial)
++    }
++
++    private func sectionTitle(_ title: String, symbol: String) -> some View {
++        Label(title, systemImage: symbol)
++            .font(.system(size: 15, weight: .bold, design: .rounded))
++    }
++
++    private func initialize() {
++        // Two requested choices: never silently replace either with the
++        // TrollStore-only direct backend from the upstream application.
++        LocationBackend.prefersDirect = false
++        method = SpoofBackend.current == .network ? .network : .developer
++        SpoofBackend.current = method
++        refresh()
++        Task { await session.adoptNetworkSpoofIfRunning(pairing: pairing) }
++    }
++
++    private func refresh() {
++        pairing.refresh()
++        identity.refreshTrust()
++        vpnUp = TunnelController.loopbackReachable
++        if method == .network { Task { await network.refreshStatus() } }
++    }
++
++    @MainActor
++    private func searchPlace() async {
++        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
++        guard !query.isEmpty else { return }
++        if let found = CoordinateParser.parse(query) {
++            showOnMap(found.coordinate)
++            return
++        }
++        searching = true
++        defer { searching = false }
++        let request = MKLocalSearch.Request()
++        request.naturalLanguageQuery = query
++        do {
++            let result = try await MKLocalSearch(request: request).start()
++            guard let coordinate = result.mapItems.first?.placemark.coordinate else {
++                searchError = tr("ما حصلت نتيجة؛ جرّب اسم مدينة أخرى", "No result. Try another city or address.")
++                return
++            }
++            showOnMap(coordinate)
++        } catch {
++            searchError = error.localizedDescription
++        }
++    }
++
++    private func showOnMap(_ coordinate: CLLocationCoordinate2D) {
++        session.setPin(coordinate)
++        camera = .region(MKCoordinateRegion(center: coordinate,
++            span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)))
++        searchFocused = false
++    }
++}
++
++/// A deliberately small diagnostics sheet; experts can still open the original
++/// detailed tunnel diagnostics from the source tree if needed.
++private struct XSAdvancedView: View {
++    let arabic: Bool
++    @Environment(\.dismiss) private var dismiss
++    @StateObject private var identity = InterceptIdentity.shared
++    @StateObject private var pairing = PairingStore.shared
++
++    private func tr(_ ar: String, _ en: String) -> String { arabic ? ar : en }
++
++    var body: some View {
++        NavigationStack {
++            List {
++                Section(tr("الجهاز", "Device")) {
++                    LabeledContent("iOS", value: UIDevice.current.systemVersion)
++                    LabeledContent(tr("ملف Pairing", "Pairing file"),
++                                   value: pairing.hasPairingFile ? tr("موجود", "Imported") : tr("غير موجود", "Missing"))
++                    LabeledContent("LocalDevVPN", value: TunnelController.loopbackReachable ? tr("متصل", "Connected") : tr("غير متصل", "Disconnected"))
++                    LabeledContent(tr("شهادة Network", "Network certificate"),
++                                   value: identity.trust == .trusted ? tr("موثوقة", "Trusted") : tr("غير جاهزة", "Not ready"))
++                    LabeledContent(tr("نفق Network المدمج", "Built-in Network tunnel"),
++                                   value: TunnelController.staticBlocker == nil ? tr("يمكن اختباره", "Testable") : tr("غير متاح", "Unavailable"))
++                }
++                Section(tr("مهم", "Important")) {
++                    Text(tr("مجرد اتصال الـVPN أو حفظ الإحداثيات ما يعني أن نظام iOS استخدم الموقع الجديد. افحص الموقع من تطبيق الخرائط.",
++                            "A connected VPN or saved pin does not prove iOS adopted the new location. Verify with Maps."))
++                    Text(tr("Network يتطلب شهادة موثوقة وامتياز Packet Tunnel في التوقيع. LocalDevVPN الخارجي لا يوفر بروكسي Network.",
++                            "Network requires a trusted certificate and Packet Tunnel entitlement. External LocalDevVPN cannot provide the Network proxy."))
++                }
++            }
++            .navigationTitle("XS Location")
++            .toolbar { ToolbarItem(placement: .confirmationAction) { Button(tr("تم", "Done")) { dismiss() } } }
++        }
++    }
++}
++
++/// The normal person only needs three certificate steps. Keep the original
++/// NetworkModeView available for diagnostics, but out of the first-run flow.
++private struct XSCertificateView: View {
++    let arabic: Bool
++
++    @Environment(\.dismiss) private var dismiss
++    @Environment(\.scenePhase) private var scenePhase
++    @StateObject private var identity = InterceptIdentity.shared
++    @State private var shareFile: URL?
++    @State private var errorMessage: String?
++    @State private var preparing = false
++    @State private var showDetails = false
++
++    private let blue = Color(red: 0.22, green: 0.38, blue: 0.88)
++    private let mint = Color(red: 0.07, green: 0.65, blue: 0.52)
++    private func tr(_ ar: String, _ en: String) -> String { arabic ? ar : en }
++
++    var body: some View {
++        NavigationStack {
++            ScrollView {
++                VStack(alignment: .leading, spacing: 18) {
++                    HStack(spacing: 11) {
++                        Image(systemName: identity.trust == .trusted ? "checkmark.shield.fill" : "lock.shield")
++                            .font(.system(size: 27))
++                            .foregroundStyle(identity.trust == .trusted ? mint : blue)
++                        VStack(alignment: .leading, spacing: 5) {
++                            Text(tr("شهادة الاتصال", "Network certificate"))
++                                .font(.system(size: 21, weight: .bold))
++                            Text(identity.trust == .trusted
++                                 ? tr("مُثبّتة وموثوقة ✅", "Installed and trusted ✅")
++                                 : tr("جهّزها مرة واحدة على كل جهاز", "Set this up once per device"))
++                                .font(.subheadline).foregroundStyle(.secondary)
++                        }
++                    }
++
++                    certificateStep(1, title: tr("نزّل الشهادة", "Download the certificate"),
++                                    detail: tr("افتح Safari واسمح بتحميل ملف الشهادة.", "Open Safari and allow the certificate download.")) {
++                        Button {
++                            Task { await install() }
++                        } label: {
++                            HStack(spacing: 7) {
++                                if preparing { ProgressView().tint(.white) }
++                                Image(systemName: "square.and.arrow.down")
++                                Text(tr("تحميل الشهادة", "Download certificate"))
++                            }
++                        }
++                        .buttonStyle(.borderedProminent).tint(blue)
++                        .disabled(preparing)
++                    }
++
++                    certificateStep(2, title: tr("ثبّت ملف التعريف", "Install the profile"),
++                                    detail: tr("الإعدادات ← عام ← VPN وإدارة الجهاز ← الملف الذي تم تنزيله ← تثبيت.",
++                                               "Settings → General → VPN & Device Management → Downloaded Profile → Install.")) {
++                        Button(tr("فتح الإعدادات", "Open Settings")) { openSettings() }
++                            .buttonStyle(.bordered)
++                    }
++
++                    certificateStep(3, title: tr("فعّل الثقة بالشهادة", "Trust the certificate"),
++                                    detail: tr("الإعدادات ← عام ← حول ← إعدادات الوثوق بالشهادات، ثم فعّل شهادة XS Location.",
++                                               "Settings → General → About → Certificate Trust Settings → enable the XS Location certificate.")) {
++                        Button {
++                            identity.refreshTrust()
++                            prepareShareFile()
++                        } label: {
++                            Label(tr("التحقق من الثقة", "Check certificate trust"), systemImage: "checkmark.shield")
++                        }
++                        .buttonStyle(.bordered)
++                    }
++
++                    if let errorMessage {
++                        Label(errorMessage, systemImage: "exclamationmark.triangle")
++                            .font(.footnote).foregroundStyle(.orange)
++                    }
++
++                    if let shareFile {
++                        ShareLink(item: shareFile) {
++                            Label(tr("مشاركة ملف الشهادة", "Share certificate file"), systemImage: "square.and.arrow.up")
++                                .font(.subheadline)
++                        }
++                    }
++
++                    Button {
++                        showDetails = true
++                    } label: {
++                        Label(tr("اختبارات الشبكة والتفاصيل التقنية", "Network checks and advanced details"),
++                              systemImage: "wrench.adjustable")
++                            .font(.subheadline)
++                    }
++
++                    Text(tr("تنبيه خصوصية: الوثوق بشهادة جذرية قرار حساس. استخدم التطبيق من مصدر تثق فيه، واحذف الشهادة من إعدادات iOS متى ما انتهيت.",
++                            "Privacy note: trusting a root certificate is sensitive. Use only trusted builds, and remove the certificate in iOS Settings when finished."))
++                        .font(.caption).foregroundStyle(.secondary)
++                }
++                .padding(20)
++            }
++            .background(Color(uiColor: .systemGroupedBackground))
++            .navigationTitle(tr("الإعداد السريع", "Quick setup"))
++            .navigationBarTitleDisplayMode(.inline)
++            .toolbar {
++                ToolbarItem(placement: .confirmationAction) {
++                    Button(tr("تم", "Done")) { dismiss() }
++                }
++            }
++            .environment(\.layoutDirection, arabic ? .rightToLeft : .leftToRight)
++            .sheet(isPresented: $showDetails) { NetworkModeView() }
++            .onAppear {
++                identity.refreshTrust()
++                prepareShareFile()
++            }
++            .onChange(of: scenePhase) { _, phase in
++                if phase == .active { identity.refreshTrust() }
++            }
++        }
++    }
++
++    private func certificateStep<Accessory: View>(
++        _ number: Int, title: String, detail: String,
++        @ViewBuilder accessory: () -> Accessory
++    ) -> some View {
++        HStack(alignment: .top, spacing: 11) {
++            Text("\(number)")
++                .font(.system(size: 14, weight: .bold))
++                .foregroundStyle(blue)
++                .frame(width: 29, height: 29)
++                .background(blue.opacity(0.10), in: Circle())
++            VStack(alignment: .leading, spacing: 9) {
++                Text(title).font(.system(size: 15, weight: .bold))
++                Text(detail).font(.subheadline).foregroundStyle(.secondary)
++                    .fixedSize(horizontal: false, vertical: true)
++                accessory()
++            }
++            Spacer(minLength: 0)
++        }
++        .padding(16)
++        .background(Color(uiColor: .secondarySystemGroupedBackground),
++                    in: RoundedRectangle(cornerRadius: 19))
++    }
++
++    @MainActor
++    private func install() async {
++        preparing = true
++        defer { preparing = false }
++        errorMessage = nil
++        do {
++            try identity.ensureCreated()
++            prepareShareFile()
++            guard let der = identity.authorityCertificate,
++                  let url = await CertificateServer.shared.publish(der) else {
++                errorMessage = tr("تعذر فتح Safari. جرب مشاركة الشهادة وحفظها في الملفات.",
++                                  "Safari couldn't open the download. Try sharing the certificate to Files.")
++                return
++            }
++            await UIApplication.shared.open(url)
++        } catch {
++            errorMessage = error.localizedDescription
++        }
++    }
++
++    private func prepareShareFile() {
++        guard let der = identity.authorityCertificate else {
++            shareFile = nil
++            return
++        }
++        let file = FileManager.default.temporaryDirectory.appendingPathComponent(CertificateServer.fileName)
++        do {
++            try der.write(to: file, options: .atomic)
++            shareFile = file
++        } catch { shareFile = nil }
++    }
++
++    private func openSettings() {
++        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
++        UIApplication.shared.open(url)
++    }
++}
+diff --git a/Locus/Resources/Info.plist b/Locus/Resources/Info.plist
+index c6b51ee..6cbbb25 100644
+--- a/Locus/Resources/Info.plist
++++ b/Locus/Resources/Info.plist
+@@ -5,7 +5,7 @@
+ 	<key>CFBundleDevelopmentRegion</key>
+ 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+ 	<key>CFBundleDisplayName</key>
+-	<string>Locus</string>
++	<string>XS Location</string>
+ 	<key>CFBundleExecutable</key>
+ 	<string>$(EXECUTABLE_NAME)</string>
+ 	<key>CFBundleIdentifier</key>
+@@ -39,11 +39,11 @@
+ 		<string>UIInterfaceOrientationLandscapeRight</string>
+ 	</array>
+ 	<key>NSLocationWhenInUseUsageDescription</key>
+-	<string>Locus uses your real location so you can aim the map and return home after teleporting.</string>
++	<string>XS Location uses your location to display the map, verify test positions, and restore your actual position.</string>
+ 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+-	<string>Locus keeps a light location session alive so simulated GPS can stay active in the background.</string>
++	<string>XS Location uses background location while a developer location simulation is running.</string>
+ 	<key>NSLocalNetworkUsageDescription</key>
+-	<string>Locus uses the local network to advertise as a pairable host (iOS 27 pairing) and to reach the developer tunnel (LocalDevVPN) for GPS override.</string>
++	<string>XS Location uses the local network to connect to the on-device developer tunnel for location simulation.</string>
+ 	<key>NSBonjourServices</key>
+ 	<array>
+ 		<string>_remotepairing._tcp</string>
+@@ -97,7 +97,7 @@
+ 			<key>UTTypeDescription</key>
+ 			<string>Remote Pairing File</string>
+ 			<key>UTTypeIdentifier</key>
+-			<string>com.chrismack.locus.rppairing</string>
++			<string>com.hso0ooni.xslocation.rppairing</string>
+ 			<key>UTTypeTagSpecification</key>
+ 			<dict>
+ 				<key>public.filename-extension</key>
+@@ -123,10 +123,11 @@
+ 	<array>
+ 		<dict>
+ 			<key>CFBundleURLName</key>
+-			<string>com.chrismack.locus</string>
++			<string>com.hso0ooni.xslocation</string>
+ 			<key>CFBundleURLSchemes</key>
+ 			<array>
+-				<string>locus</string>
++			<string>locus</string>
++			<string>xslocation</string>
+ 			</array>
+ 		</dict>
+ 	</array>
+diff --git a/Locus/Resources/Locus.entitlements b/Locus/Resources/Locus.entitlements
+index 1a050fe..b9b01b8 100644
+--- a/Locus/Resources/Locus.entitlements
++++ b/Locus/Resources/Locus.entitlements
+@@ -16,7 +16,7 @@
+ 	</array>
+ 	<key>com.apple.security.application-groups</key>
+ 	<array>
+-		<string>group.com.chrismack.locus</string>
++		<string>group.com.hso0ooni.xslocation</string>
+ 	</array>
+ 	<key>get-task-allow</key>
+ 	<true/>
+diff --git a/Locus/Support/CertificateServer.swift b/Locus/Support/CertificateServer.swift
+index b72f933..b57d8aa 100644
+--- a/Locus/Support/CertificateServer.swift
++++ b/Locus/Support/CertificateServer.swift
+@@ -17,7 +17,7 @@ final class CertificateServer {
+     private var shutdown: DispatchWorkItem?
+     private var background: UIBackgroundTaskIdentifier = .invalid
+ 
+-    nonisolated static let fileName = "LocusAuthority.cer"
++    nonisolated static let fileName = "XSLocationAuthority.cer"
+ 
+     /// Starts serving `certificate` and returns the URL to open, or `nil` if the
+     /// listener couldn't start.
+diff --git a/Locus/Support/LocalDevVPN.swift b/Locus/Support/LocalDevVPN.swift
+index 843261f..224a8ed 100644
+--- a/Locus/Support/LocalDevVPN.swift
++++ b/Locus/Support/LocalDevVPN.swift
+@@ -14,7 +14,7 @@ enum LocalDevVPN {
+     static let detectURL = URL(string: "localdevvpn://")!
+ 
+     /// Starts the tunnel, then returns to Locus via `locus://`.
+-    static let enableURL = URL(string: "localdevvpn://enable?scheme=locus")!
++    static let enableURL = URL(string: "localdevvpn://enable?scheme=xslocation")!
+ 
+     static var isInstalled: Bool {
+         UIApplication.shared.canOpenURL(detectURL)
+diff --git a/LocusTunnel/LocusTunnel.entitlements b/LocusTunnel/LocusTunnel.entitlements
+index aa56c30..b64a46d 100644
+--- a/LocusTunnel/LocusTunnel.entitlements
++++ b/LocusTunnel/LocusTunnel.entitlements
+@@ -8,7 +8,7 @@
+ 	</array>
+ 	<key>com.apple.security.application-groups</key>
+ 	<array>
+-		<string>group.com.chrismack.locus</string>
++		<string>group.com.hso0ooni.xslocation</string>
+ 	</array>
+ </dict>
+ </plist>
+diff --git a/LocusTunnel/Shared/InterceptConfig.swift b/LocusTunnel/Shared/InterceptConfig.swift
+index 8a77c99..9f899d9 100644
+--- a/LocusTunnel/Shared/InterceptConfig.swift
++++ b/LocusTunnel/Shared/InterceptConfig.swift
+@@ -44,7 +44,7 @@ enum InterceptConfig {
+     static let controlPort: UInt16 = 8445
+ 
+     /// Name of the certificate authority and leaf in the keychain / UI.
+-    static let authorityName = "Locus Location Authority"
++    static let authorityName = "XS Location Authority"
+ }
+ 
+ /// App → extension.
+diff --git a/LocusTunnel/Shared/LocusTunnelStatusFile.swift b/LocusTunnel/Shared/LocusTunnelStatusFile.swift
+index d1d2318..42ba8af 100644
+--- a/LocusTunnel/Shared/LocusTunnelStatusFile.swift
++++ b/LocusTunnel/Shared/LocusTunnelStatusFile.swift
+@@ -23,7 +23,7 @@
+ import Foundation
+ 
+ enum LocusTunnelStatusFile {
+-    static let appGroup = "group.com.chrismack.locus"
++    static let appGroup = "group.com.hso0ooni.xslocation"
+ 
+     private static let fileName = "tunnel-status.txt"
+     private static let maxBytes = 64 * 1024
+diff --git a/README-XS.md b/README-XS.md
+new file mode 100644
+index 0000000..475cebb
+--- /dev/null
++++ b/README-XS.md
+@@ -0,0 +1,68 @@
++# XS Location — iPhone location testing
++
++تطبيق iOS أصلي بواجهة **SwiftUI**، باللغة العربية والإنجليزية، يجمع طريقتين مختلفتين في شاشة واحدة. بني على مشروع [Locus](https://github.com/ElProfessorFRidg/locus) مفتوح المصدر (MIT)، مع الاحتفاظ بإسناد الرخصة الأصلي في ملف `LICENSE`.
++
++## الاختيار بين الطريقتين
++
++| الطريقة | Pairing | المتطلبات | النتيجة المتوقعة |
++| --- | --- | --- | --- |
++| **Developer — LocalDevVPN** | نعم؛ ملف لكل جهاز | ملف RPPairing صالح واتصال LocalDevVPN (أو نفق مماثل) | خدمة محاكاة موقع النظام، بما فيها مصادر GPS، ما دام النظام والتطبيق المستهدف يقبلان المحاكاة |
++| **Network — Local VPN** | **لا** | امتياز `packet-tunnel-provider` في **توقيع التطبيق النهائي** وشهادة شبكة مثبّتة وموثوقة | تعديل استجابات خدمة تحديد الموقع المعتمدة على Wi-Fi والأبراج فقط؛ GPS والأماكن المخزنة مؤقتاً قد تتغلب عليها |
++
++لا تعني كلمة «Network نشط» أن خرائط iOS أو التطبيقات الخارجية تستخدم بالضرورة الإحداثيات الجديدة. يمكن أن تبقى المواقع القديمة بسبب الذاكرة المخبأة أو أن ترفض تطبيقات معينة الاتصال أو الشهادات.
++
++## كيف تستخدمه؟
++
++1. افتح **XS Location**، واختر اللغة من أعلى الشاشة.
++2. اختر إحدى بطاقتي التشغيل، ثم اضغط على الخريطة أو ابحث عن موقع.
++3. اتبع المراحل الثلاث التي تظهر في التطبيق حسب الاختيار.
++4. اضغط «تفعيل الموقع المختار»، وانتظر حالة الاتصال؛ افحص النتيجة في تطبيق «الخرائط».
++5. اضغط «إيقاف واستعادة الموقع» عند الانتهاء. قد يحتاج iOS لتحديث «خدمات الموقع» أو إعادة التشغيل قبل مسح المواقع المخزنة مؤقتاً.
++
++### Developer / LocalDevVPN
++
++1. اختر **LocalDevVPN**.
++2. استورد ملف `RPPairing` **الخاص بالجهاز نفسه** عبر الملفات.
++3. ثبّت LocalDevVPN من [App Store](https://apps.apple.com/us/app/localdevvpn/id6755608044) إن لم يكن مثبتاً، وافتح اتصال النفق.
++4. اختر الموقع وابدأ. إذا انتهى صلاحية ملف الاقتران، ستحتاج إلى إنشاء ملف جديد للجهاز.
++
++### Network / Local VPN — دون Pairing
++
++1. اختر **Network**. ستوضح لك الواجهة إن كان توقيع التطبيق يفتقد امتياز النفق.
++2. اضغط «إعداد الشهادة» ثم «تحميل الشهادة». سيحاول التطبيق فتح Safari لتنزيل ملف الجذر.
++3. من الإعدادات ← عام ← VPN وإدارة الجهاز، ثبّت ملف التعريف الذي نزلته.
++4. من الإعدادات ← عام ← حول ← إعدادات الوثوق بالشهادات، فعّل الثقة بالشهادة.
++5. ارجع للتطبيق واضغط «التحقق من الثقة» ثم «فحص»؛ بعدها ابدأ المحاكاة.
++
++**مهم جداً:** شهادة الجذر قرار أمني حساس. لا تثبّت شهادة من تطبيق معدل أو مصدر غير موثوق، واحذفها بعد انتهاء الاختبار. تشغيل **LocalDevVPN الخارجي** لا يحل محل امتياز النفق الخاص بوضع Network؛ المحرك الشبكي يحتاج امتيازه الخاص حتى يعترض استجابات خدمات تحديد الموقع.
++
++## إصدار IPA باستخدام GitHub Actions
++
++المشروع يحتوي ملف `.github/workflows/build-xs-ipa.yml`، وهو يبني `.ipa` **غير موقّع** مع التطبيق وإضافة Packet Tunnel وإضافة Widgets.
++
++1. ارفع ملفات **المشروع كاملة** إلى مستودع GitHub تتحكم فيه (لا ترفع ملف `.ipa` وحده).
++2. افتح تبويب **Actions** ثم `XS Location — Unsigned IPA`.
++3. اضغط **Run workflow**.
++4. بعد اكتمال البناء، نزّل Artifact اسمه `XS-Location-unsigned-IPA`.
++5. افتح ملف ZIP النازل من Artifacts، وستجد داخله `XS-Location-unsigned.ipa`.
++6. وقّع الـIPA بالشهادة والملف التعريفي المخصصين لجهازك باستخدام وسيلة توقيع متوافقة.
++
++### لماذا يهم التوقيع؟
++
++الـIPA غير الموقّع ليس تطبيقاً ذا صلاحيات. وجود `LocusTunnel.appex` داخل الحزمة لا يمنحه إمكانية تشغيل `NEPacketTunnelProvider`. يجب أن يسمح **Provisioning Profile** الفعلي وتوقيع التطبيق والإضافة بامتيازات **Network Extensions** المطلوبة. حسابات Apple المجانية ومعظم شهادات التوقيع العادية لا توفر هذا الامتياز؛ إن غاب، يُظهِر التطبيق المشكلة صراحة ويظل وضع **Developer / LocalDevVPN** متاحاً.
++
++هذه طريقة بناء واختبار؛ **لم يُؤكَّد تشغيل IPA على جهاز iPhone فعلي** إلى أن يُبنَى على macOS ويُوقَّع ويُجرَّب. لا نَعِد باعتراض كل طلبات الشبكة؛ بعضها مشفر أو يتحقق من الشهادة أو يتجاوز المسار الشبكي الذي يراقبه التطبيق.
++
++## مكوّنات المشروع
++
++- `Locus/Features/XS/XSRootView.swift` — الواجهة الجديدة والخطوات والشهادة.
++- `Locus/Engine/SpoofSession.swift` — ربط التشغيل والإيقاف بالمحرك.
++- `Locus/Engine/LocationEngine.swift` — خدمة موقع المطور.
++- `Locus/Engine/NetworkSpoofer.swift` — التحويل الشبكي والتحقق.
++- `LocusTunnel` — إضافة Packet Tunnel واعتراض DNS / HTTPS الخاص بالمحرك الشبكي.
++- `AppIcon.icon` — أيقونة XS Location.
++- `.github/workflows/build-xs-ipa.yml` — بناء IPA اليدوي دون صلاحيات كتابة على المستودع.
++
++## Credits
++
++Based on [Locus by its contributors](https://github.com/ElProfessorFRidg/locus) (MIT). The underlying tunnel implementation references LocalDevVPN/StosVPN in source comments. See `LICENSE` and upstream source headers. XS Location UI and integration changes are additions to that base.
+diff --git a/README.md b/README.md
+index ee98eef..b18fac2 100644
+--- a/README.md
++++ b/README.md
+@@ -1,4 +1,14 @@
+-# Locus
++# XS Location 🎯
++
++**XS Location 2.0** is a streamlined, bilingual (Arabic/English) iOS app with two clearly labelled methods: **LocalDevVPN + Pairing** for developer location simulation, and **Local VPN / Network** for Wi-Fi and cellular location-response testing without a pairing file. Tap a map, follow the three setup steps, and start or stop from one screen.
++
++**[Open the XS Location setup guide / دليل الاستخدام بالعربي](README-XS.md)** — includes GitHub Actions IPA build steps and honest requirements for Packet Tunnel entitlements.
++
++The material below documents the original **Locus** engine on which XS Location is based (MIT licensed). Some advanced features and the historical screenshots below belong to the upstream UI; the simplified XS Location start screen intentionally does not display them.
++
++---
++
++# Original Locus project documentation
+ 
+ Free and open-source iPhone location teleport. Tap the map, search a place, or drive a route — Locus injects coordinates through Apple’s **developer location service** into `locationd`, so Maps and other apps see the spoofed GPS (not just a Wi‑Fi lookup that outdoor GPS will overwrite).
+ 
+diff --git a/TrollStore/Locus.entitlements b/TrollStore/Locus.entitlements
+index e300357..5977ee7 100644
+--- a/TrollStore/Locus.entitlements
++++ b/TrollStore/Locus.entitlements
+@@ -18,7 +18,7 @@
+ 	</array>
+ 	<key>com.apple.security.application-groups</key>
+ 	<array>
+-		<string>group.com.chrismack.locus</string>
++		<string>group.com.hso0ooni.xslocation</string>
+ 		<string>group.live.cclerc.geraniumBookmarks</string>
+ 	</array>
+ 	<key>com.apple.security.exception.files.absolute-path.read-only</key>
+diff --git a/project.yml b/project.yml
+index e060e3c..026760c 100644
+--- a/project.yml
++++ b/project.yml
+@@ -16,8 +16,8 @@ settings:
+     SWIFT_VERSION: "5.0"
+     TARGETED_DEVICE_FAMILY: "1,2"
+     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+-    MARKETING_VERSION: "1.3.0"
+-    CURRENT_PROJECT_VERSION: "6"
++    MARKETING_VERSION: "2.0.0"
++    CURRENT_PROJECT_VERSION: "1"
+ targets:
+   Locus:
+     type: application
+@@ -46,7 +46,9 @@ targets:
+         codeSign: true
+     settings:
+       base:
+-        PRODUCT_BUNDLE_IDENTIFIER: com.chrismack.locus
++        PRODUCT_BUNDLE_IDENTIFIER: com.hso0ooni.xslocation
++        # Keep the executable name stable for the inherited signing/packaging
++        # scripts. CFBundleDisplayName gives users the XS Location branding.
+         PRODUCT_NAME: Locus
+         INFOPLIST_FILE: Locus/Resources/Info.plist
+         CODE_SIGN_ENTITLEMENTS: Locus/Resources/Locus.entitlements
+@@ -86,7 +88,7 @@ targets:
+           - "**/Info.plist"
+     settings:
+       base:
+-        PRODUCT_BUNDLE_IDENTIFIER: com.chrismack.locus.tunnel
++        PRODUCT_BUNDLE_IDENTIFIER: com.hso0ooni.xslocation.tunnel
+         PRODUCT_NAME: LocusTunnel
+         INFOPLIST_FILE: LocusTunnel/Info.plist
+         CODE_SIGN_ENTITLEMENTS: LocusTunnel/LocusTunnel.entitlements
+@@ -137,7 +139,7 @@ targets:
+       - path: Locus/Engine/RouteStorage.swift
+     settings:
+       base:
+-        PRODUCT_BUNDLE_IDENTIFIER: com.chrismack.locus.tests
++        PRODUCT_BUNDLE_IDENTIFIER: com.hso0ooni.xslocation.tests
+         GENERATE_INFOPLIST_FILE: true
+         CODE_SIGNING_ALLOWED: NO
+         SUPPORTS_MACCATALYST: NO
+@@ -154,7 +156,7 @@ targets:
+       - path: Shared
+     settings:
+       base:
+-        PRODUCT_BUNDLE_IDENTIFIER: com.chrismack.locus.widgets
++        PRODUCT_BUNDLE_IDENTIFIER: com.hso0ooni.xslocation.widgets
+         PRODUCT_NAME: LocusWidgets
+         INFOPLIST_FILE: LocusWidgets/Info.plist
+         CODE_SIGN_STYLE: Automatic
