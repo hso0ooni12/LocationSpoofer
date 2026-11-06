@@ -265,6 +265,91 @@ index c6ea2e6..35597ad 100644
              issuerCN: authorityName,
              notBefore: notBefore,
              notAfter: now.addingTimeInterval(TimeInterval(Self.leafDays) * 86_400),
+diff --git a/Locus/Engine/PairOnDeviceService.swift b/Locus/Engine/PairOnDeviceService.swift
+index 192345c..ef6f95d 100644
+--- a/Locus/Engine/PairOnDeviceService.swift
++++ b/Locus/Engine/PairOnDeviceService.swift
+@@ -30,6 +30,7 @@ final class PairOnDeviceService: ObservableObject {
+     private let keepAlive = PairingKeepAlive()
+     private let audioKeepAlive = SilentAudioKeepAlive()
+     private let advertiser = PairableHostAdvertiser()
++    private var displayName = "Locus"
+ 
+     var isBusy: Bool {
+         switch phase {
+@@ -38,8 +39,9 @@ final class PairOnDeviceService: ObservableObject {
+         }
+     }
+ 
+-    func start(pairingStore: PairingStore) {
++    func start(pairingStore: PairingStore, name: String = "Locus") {
+         guard !isBusy else { return }
++        displayName = name
+         phase = .advertising
+         pin = nil
+         debugPort = nil
+@@ -56,10 +58,11 @@ final class PairOnDeviceService: ObservableObject {
+ 
+         let outputPath = pairingStore.pairingURL.path
+         let box = callbackBox
++        let advertisedName = name
+ 
+         worker = Thread {
+             autoreleasepool {
+-                Self.runBlockingAccept(outputPath: outputPath, box: box)
++                Self.runBlockingAccept(outputPath: outputPath, name: advertisedName, box: box)
+             }
+         }
+         worker?.name = "locus.pairable-host"
+@@ -108,7 +111,7 @@ final class PairOnDeviceService: ObservableObject {
+     fileprivate func handleConnected() {
+         phase = .deviceConnected
+         Self.postPlainNotification(
+-            title: "Locus connected",
++            title: "\(displayName) connected",
+             body: "Generating pairing code…"
+         )
+     }
+@@ -116,7 +119,7 @@ final class PairOnDeviceService: ObservableObject {
+     fileprivate func handlePIN(_ value: String) {
+         pin = value
+         phase = .awaitingPIN(value)
+-        Self.postPINNotification(value)
++        Self.postPINNotification(value, name: displayName)
+         UINotificationFeedbackGenerator().notificationOccurred(.success)
+     }
+ 
+@@ -125,7 +128,7 @@ final class PairOnDeviceService: ObservableObject {
+         phase = .succeeded
+         teardown()
+         Self.postPlainNotification(
+-            title: "Locus paired",
++            title: "\(displayName) paired",
+             body: "RPPairing is ready. Connect LocalDevVPN, then teleport."
+         )
+     }
+@@ -164,9 +167,9 @@ final class PairOnDeviceService: ObservableObject {
+         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+     }
+ 
+-    private static func postPINNotification(_ pin: String) {
++    private static func postPINNotification(_ pin: String, name: String) {
+         let content = UNMutableNotificationContent()
+-        content.title = "Locus pairing code"
++        content.title = "\(name) pairing code"
+         content.body = pin
+         content.sound = .default
+         if #available(iOS 15.0, *) {
+@@ -185,8 +188,7 @@ final class PairOnDeviceService: ObservableObject {
+         UNUserNotificationCenter.current().add(request)
+     }
+ 
+-    private static func runBlockingAccept(outputPath: String, box: PairCallbackBox) {
+-        let name = "Locus"
++    private static func runBlockingAccept(outputPath: String, name: String, box: PairCallbackBox) {
+         let model = "Mac17,7"
+ 
+         var outFile: OpaquePointer?
 diff --git a/Locus/Engine/PairingStore.swift b/Locus/Engine/PairingStore.swift
 index b8c411f..d906679 100644
 --- a/Locus/Engine/PairingStore.swift
@@ -278,12 +363,219 @@ index b8c411f..d906679 100644
              types.append(custom)
          }
          return types
+diff --git a/Locus/Features/XS/XSPairOnDeviceView.swift b/Locus/Features/XS/XSPairOnDeviceView.swift
+new file mode 100644
+index 0000000..c6880e6
+--- /dev/null
++++ b/Locus/Features/XS/XSPairOnDeviceView.swift
+@@ -0,0 +1,201 @@
++import SwiftUI
++
++/// XS Location's iOS 27 pairing wizard. The host starts advertising as soon as
++/// this sheet opens; iOS still requires the owner to approve the six-digit code.
++struct XSPairOnDeviceView: View {
++    @EnvironmentObject private var pairing: PairingStore
++    @Environment(\.dismiss) private var dismiss
++
++    @StateObject private var host = PairOnDeviceService()
++    @State private var started = false
++
++    let arabic: Bool
++
++    private let blue = Color(red: 0.22, green: 0.38, blue: 0.88)
++    private let mint = Color(red: 0.07, green: 0.65, blue: 0.52)
++    private var surface: Color { Color(uiColor: .secondarySystemGroupedBackground) }
++
++    private func tr(_ ar: String, _ en: String) -> String { arabic ? ar : en }
++
++    var body: some View {
++        NavigationStack {
++            ScrollView(showsIndicators: false) {
++                VStack(alignment: .leading, spacing: 18) {
++                    introduction
++                    statusCard
++                    instructions
++                    footnote
++                }
++                .padding(20)
++                .frame(maxWidth: 570)
++                .frame(maxWidth: .infinity)
++            }
++            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
++            .navigationTitle(tr("الاقتران", "Device pairing"))
++            .navigationBarTitleDisplayMode(.inline)
++            .toolbar {
++                ToolbarItem(placement: .cancellationAction) {
++                    Button(tr("إغلاق", "Close")) {
++                        host.resetToIdle()
++                        dismiss()
++                    }
++                }
++            }
++        }
++        .environment(\.layoutDirection, arabic ? .rightToLeft : .leftToRight)
++        .onAppear {
++            guard !started else { return }
++            started = true
++            host.start(pairingStore: pairing, name: "XS Location")
++        }
++        .onChange(of: host.phase) { _, phase in
++            if case .succeeded = phase {
++                pairing.refresh()
++            }
++        }
++        .onDisappear {
++            if host.isBusy { host.resetToIdle() }
++        }
++    }
++
++    private var introduction: some View {
++        HStack(alignment: .top, spacing: 13) {
++            Image(systemName: "iphone.gen3.radiowaves.left.and.right")
++                .font(.system(size: 26, weight: .semibold))
++                .foregroundStyle(blue)
++                .frame(width: 54, height: 54)
++                .background(blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
++
++            VStack(alignment: .leading, spacing: 6) {
++                Text(tr("بدون كمبيوتر وبدون استيراد ملف", "No computer or file import"))
++                    .font(.system(size: 19, weight: .bold, design: .rounded))
++                Text(tr("بدأ XS Location تجهيز الاقتران تلقائيًا. بقي تأكيدك من إعدادات iOS، وبعدها تُحفظ بيانات الربط داخل التطبيق.",
++                        "XS Location starts pairing automatically. Approve it in iOS Settings; the pairing data is then saved inside the app."))
++                    .font(.subheadline)
++                    .foregroundStyle(.secondary)
++                    .fixedSize(horizontal: false, vertical: true)
++            }
++        }
++    }
++
++    private var statusCard: some View {
++        VStack(spacing: 13) {
++            switch host.phase {
++            case .idle, .advertising:
++                ProgressView().tint(blue)
++                Text(tr("بانتظار موافقتك من الإعدادات", "Waiting for approval in Settings"))
++                    .font(.headline)
++                Text(tr("افتح وضع المطوّر واختر الاقتران مع XS Location.",
++                        "Open Developer Mode and choose to pair with XS Location."))
++                    .font(.subheadline)
++                    .foregroundStyle(.secondary)
++                    .multilineTextAlignment(.center)
++
++            case .deviceConnected:
++                ProgressView().tint(blue)
++                Text(tr("تم الاتصال بالآيفون", "Connected to this iPhone"))
++                    .font(.headline)
++                Text(tr("جاري إنشاء رمز من ٦ أرقام…", "Generating your six-digit code…"))
++                    .font(.subheadline)
++                    .foregroundStyle(.secondary)
++
++            case .awaitingPIN(let pin):
++                Image(systemName: "number.square.fill")
++                    .font(.system(size: 30))
++                    .foregroundStyle(blue)
++                Text(tr("اكتب هذا الرمز في الإعدادات", "Enter this code in Settings"))
++                    .font(.headline)
++                Text(pin)
++                    .font(.system(size: 43, weight: .bold, design: .rounded))
++                    .tracking(7)
++                    .monospacedDigit()
++                    .textSelection(.enabled)
++                    .environment(\.layoutDirection, .leftToRight)
++                Text(tr("بعد إدخال رمز قفل الجهاز، سيطلب النظام رمز الاقتران هذا.",
++                        "After your device passcode, iOS will ask for this pairing code."))
++                    .font(.caption)
++                    .foregroundStyle(.secondary)
++                    .multilineTextAlignment(.center)
++
++            case .succeeded:
++                Image(systemName: "checkmark.seal.fill")
++                    .font(.system(size: 38))
++                    .foregroundStyle(mint)
++                Text(tr("تم الاقتران بنجاح", "Paired successfully"))
++                    .font(.title3.bold())
++                Text(tr("انحفظ الربط تلقائيًا. ارجع للصفحة الرئيسية وشغّل LocalDevVPN.",
++                        "Pairing was saved automatically. Return to the main screen and connect LocalDevVPN."))
++                    .font(.subheadline)
++                    .foregroundStyle(.secondary)
++                    .multilineTextAlignment(.center)
++                Button(tr("العودة للتطبيق", "Back to XS Location")) { dismiss() }
++                    .buttonStyle(.borderedProminent)
++                    .tint(blue)
++
++            case .failed(let reason):
++                Image(systemName: "exclamationmark.triangle.fill")
++                    .font(.system(size: 36))
++                    .foregroundStyle(.orange)
++                Text(tr("تعذّر الاقتران", "Pairing failed"))
++                    .font(.headline)
++                Text(reason)
++                    .font(.caption)
++                    .foregroundStyle(.secondary)
++                    .multilineTextAlignment(.center)
++                    .textSelection(.enabled)
++                Button(tr("إعادة المحاولة", "Try again")) {
++                    host.acknowledgeFailure()
++                    host.start(pairingStore: pairing, name: "XS Location")
++                }
++                .buttonStyle(.borderedProminent)
++                .tint(blue)
++            }
++        }
++        .frame(maxWidth: .infinity)
++        .padding(22)
++        .background(surface, in: RoundedRectangle(cornerRadius: 22))
++        .accessibilityElement(children: .contain)
++    }
++
++    private var instructions: some View {
++        VStack(alignment: .leading, spacing: 14) {
++            Text(tr("خطوات تأكيد الاقتران", "Approve pairing in four steps"))
++                .font(.headline)
++            numbered(1, tr("خل XS Location يعمل بالخلفية، واسمح بالشبكة المحلية والإشعارات إذا طلبها.",
++                            "Keep XS Location running and allow Local Network and notifications if prompted."))
++            numbered(2, tr("افتح الإعدادات ← الخصوصية والأمان ← وضع المطوّر.",
++                            "Open Settings → Privacy & Security → Developer Mode."))
++            numbered(3, tr("اضغط Pair with XS Location (أو Pair with Host) ثم Pair.",
++                            "Tap Pair with XS Location (or Pair with Host), then Pair."))
++            numbered(4, tr("أدخل رمز قفل الجهاز، ثم رمز الاقتران المكوّن من ٦ أرقام الذي يظهر هنا أو في الإشعار.",
++                            "Enter your device passcode, then the six-digit code shown here or in the notification."))
++        }
++        .padding(18)
++        .background(surface, in: RoundedRectangle(cornerRadius: 22))
++    }
++
++    private func numbered(_ number: Int, _ description: String) -> some View {
++        HStack(alignment: .top, spacing: 12) {
++            Text("\(number)")
++                .font(.caption.bold())
++                .foregroundStyle(blue)
++                .frame(width: 27, height: 27)
++                .background(blue.opacity(0.10), in: Circle())
++            Text(description)
++                .font(.subheadline)
++                .fixedSize(horizontal: false, vertical: true)
++            Spacer(minLength: 0)
++        }
++    }
++
++    private var footnote: some View {
++        Label(
++            tr("هذه الخطوة تنشئ بيانات الاقتران تلقائيًا بعد موافقتك. نظام iOS ما يسمح لنا بتجاوز الموافقة أو رمز الأمان.",
++               "Pairing data is generated after your approval. iOS requires you to confirm the pairing and security code."),
++            systemImage: "lock.shield"
++        )
++        .font(.caption)
++        .foregroundStyle(.secondary)
++        .fixedSize(horizontal: false, vertical: true)
++    }
++}
 diff --git a/Locus/Features/XS/XSRootView.swift b/Locus/Features/XS/XSRootView.swift
 new file mode 100644
-index 0000000..d519008
+index 0000000..d39adb2
 --- /dev/null
 +++ b/Locus/Features/XS/XSRootView.swift
-@@ -0,0 +1,741 @@
+@@ -0,0 +1,760 @@
 +import CoreLocation
 +import MapKit
 +import SwiftUI
@@ -312,6 +604,7 @@ index 0000000..d519008
 +    @State private var searching = false
 +    @State private var searchError: String?
 +    @State private var showImporter = false
++    @State private var showOnDevicePairing = false
 +    @State private var showNetworkSetup = false
 +    @State private var showAdvanced = false
 +    @State private var vpnUp = TunnelController.loopbackReachable
@@ -348,6 +641,10 @@ index 0000000..d519008
 +            .safeAreaInset(edge: .bottom, spacing: 0) { actionBar }
 +            .environment(\.layoutDirection, ar ? .rightToLeft : .leftToRight)
 +            .sheet(isPresented: $showNetworkSetup) { XSCertificateView(arabic: ar) }
++            .sheet(isPresented: $showOnDevicePairing) {
++                XSPairOnDeviceView(arabic: ar)
++                    .environmentObject(pairing)
++            }
 +            .sheet(isPresented: $showAdvanced) { XSAdvancedView(arabic: ar) }
 +            .fileImporter(
 +                isPresented: $showImporter,
@@ -615,14 +912,28 @@ index 0000000..d519008
 +        VStack(alignment: .leading, spacing: 14) {
 +            sectionTitle(tr("التجهيز — خطوة بخطوة", "Setup — step by step"), symbol: "list.number")
 +            if method == .developer {
-+                setupRow(1, title: tr("أضف ملف Pairing", "Import a pairing file"),
-+                         description: pairing.hasPairingFile ? tr("الملف موجود", "File imported") : tr("اختر ملف الجهاز من تطبيق الملفات", "Choose this device's pairing file"),
-+                         success: pairing.hasPairingFile) {
-+                    Button(tr(pairing.hasPairingFile ? "استبدال" : "اختيار الملف", pairing.hasPairingFile ? "Replace" : "Choose file")) {
-+                        showImporter = true
++                if #available(iOS 27.0, *) {
++                    setupRow(1, title: tr("الاقتران من نفس الآيفون", "Pair on this iPhone"),
++                             description: pairing.hasPairingFile
++                                 ? tr("تم الاقتران وحفظ البيانات تلقائيًا", "Paired and saved automatically")
++                                 : tr("بدون كمبيوتر أو اختيار ملف؛ وافق على رمز الاقتران في إعدادات المطوّر", "No computer or file picker. Confirm the pairing code in Developer Mode."),
++                             success: pairing.hasPairingFile) {
++                        Button(tr(pairing.hasPairingFile ? "إعادة الاقتران" : "بدء الاقتران", pairing.hasPairingFile ? "Pair again" : "Start pairing")) {
++                            showOnDevicePairing = true
++                        }
++                        .buttonStyle(.bordered)
++                        .controlSize(.small)
 +                    }
-+                    .buttonStyle(.bordered)
-+                    .controlSize(.small)
++                } else {
++                    setupRow(1, title: tr("أضف ملف Pairing", "Import a pairing file"),
++                             description: pairing.hasPairingFile ? tr("الملف موجود", "File imported") : tr("اختر ملف الجهاز من تطبيق الملفات", "Choose this device's pairing file"),
++                             success: pairing.hasPairingFile) {
++                        Button(tr(pairing.hasPairingFile ? "استبدال" : "اختيار الملف", pairing.hasPairingFile ? "Replace" : "Choose file")) {
++                            showImporter = true
++                        }
++                        .buttonStyle(.bordered)
++                        .controlSize(.small)
++                    }
 +                }
 +                setupRow(2, title: tr("شغّل LocalDevVPN", "Connect LocalDevVPN"),
 +                         description: vpnUp ? tr("النفق المحلي جاهز", "Local tunnel is available") : tr("حمّل التطبيق من App Store واتصل", "Install from App Store and connect"),
@@ -1156,10 +1467,10 @@ index d1d2318..42ba8af 100644
      private static let maxBytes = 64 * 1024
 diff --git a/README-XS.md b/README-XS.md
 new file mode 100644
-index 0000000..475cebb
+index 0000000..b361487
 --- /dev/null
 +++ b/README-XS.md
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,70 @@
 +# XS Location — iPhone location testing
 +
 +تطبيق iOS أصلي بواجهة **SwiftUI**، باللغة العربية والإنجليزية، يجمع طريقتين مختلفتين في شاشة واحدة. بني على مشروع [Locus](https://github.com/ElProfessorFRidg/locus) مفتوح المصدر (MIT)، مع الاحتفاظ بإسناد الرخصة الأصلي في ملف `LICENSE`.
@@ -1168,7 +1479,7 @@ index 0000000..475cebb
 +
 +| الطريقة | Pairing | المتطلبات | النتيجة المتوقعة |
 +| --- | --- | --- | --- |
-+| **Developer — LocalDevVPN** | نعم؛ ملف لكل جهاز | ملف RPPairing صالح واتصال LocalDevVPN (أو نفق مماثل) | خدمة محاكاة موقع النظام، بما فيها مصادر GPS، ما دام النظام والتطبيق المستهدف يقبلان المحاكاة |
++| **Developer — LocalDevVPN** | نعم؛ اقتران تلقائي على iOS 27، واستيراد ملف على الأنظمة الأقدم | اقتران مع نفس الجهاز واتصال LocalDevVPN (أو نفق مماثل) | خدمة محاكاة موقع النظام، بما فيها مصادر GPS، ما دام النظام والتطبيق المستهدف يقبلان المحاكاة |
 +| **Network — Local VPN** | **لا** | امتياز `packet-tunnel-provider` في **توقيع التطبيق النهائي** وشهادة شبكة مثبّتة وموثوقة | تعديل استجابات خدمة تحديد الموقع المعتمدة على Wi-Fi والأبراج فقط؛ GPS والأماكن المخزنة مؤقتاً قد تتغلب عليها |
 +
 +لا تعني كلمة «Network نشط» أن خرائط iOS أو التطبيقات الخارجية تستخدم بالضرورة الإحداثيات الجديدة. يمكن أن تبقى المواقع القديمة بسبب الذاكرة المخبأة أو أن ترفض تطبيقات معينة الاتصال أو الشهادات.
@@ -1184,9 +1495,10 @@ index 0000000..475cebb
 +### Developer / LocalDevVPN
 +
 +1. اختر **LocalDevVPN**.
-+2. استورد ملف `RPPairing` **الخاص بالجهاز نفسه** عبر الملفات.
++2. **على iOS 27 وأحدث:** اضغط «بدء الاقتران»؛ يبدأ XS Location الإعلان عن نفسه تلقائيًا. من الإعدادات ← الخصوصية والأمان ← وضع المطوّر، اختر **Pair with XS Location** (أو **Pair with Host**) ثم وافق وأدخل رمز الاقتران ذي الستة أرقام. سيُحفظ ملف الاقتران تلقائيًا داخل التطبيق؛ لا تحتاج كمبيوترًا أو استيراد ملف، لكن موافقة النظام مطلوبة.
++   **على iOS 18–26:** استورد ملف `RPPairing` **الخاص بالجهاز نفسه** عبر الملفات.
 +3. ثبّت LocalDevVPN من [App Store](https://apps.apple.com/us/app/localdevvpn/id6755608044) إن لم يكن مثبتاً، وافتح اتصال النفق.
-+4. اختر الموقع وابدأ. إذا انتهى صلاحية ملف الاقتران، ستحتاج إلى إنشاء ملف جديد للجهاز.
++4. اختر الموقع وابدأ. إذا انتهى صلاحية بيانات الاقتران، أعد اقتران الجهاز بالطريقة المناسبة لإصدار iOS.
 +
 +### Network / Local VPN — دون Pairing
 +
@@ -1219,6 +1531,7 @@ index 0000000..475cebb
 +
 +- `Locus/Features/XS/XSRootView.swift` — الواجهة الجديدة والخطوات والشهادة.
 +- `Locus/Engine/SpoofSession.swift` — ربط التشغيل والإيقاف بالمحرك.
++- `Locus/Features/XS/XSPairOnDeviceView.swift` — شاشة الاقتران التلقائي من نفس الآيفون على iOS 27؛ توليد الرمز والحفظ عبر `PairOnDeviceService`.
 +- `Locus/Engine/LocationEngine.swift` — خدمة موقع المطور.
 +- `Locus/Engine/NetworkSpoofer.swift` — التحويل الشبكي والتحقق.
 +- `LocusTunnel` — إضافة Packet Tunnel واعتراض DNS / HTTPS الخاص بالمحرك الشبكي.
