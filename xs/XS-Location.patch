@@ -265,6 +265,186 @@ index c6ea2e6..35597ad 100644
              issuerCN: authorityName,
              notBefore: notBefore,
              notAfter: now.addingTimeInterval(TimeInterval(Self.leafDays) * 86_400),
+diff --git a/Locus/Engine/LocationEngine.swift b/Locus/Engine/LocationEngine.swift
+index d47c7cf..512f7c0 100644
+--- a/Locus/Engine/LocationEngine.swift
++++ b/Locus/Engine/LocationEngine.swift
+@@ -5,6 +5,7 @@ enum LocationEngineError: LocalizedError {
+     case invalidIP
+     case pairingRead
+     case tunnelCreate
++    case tunnelCreateDetails(String)
+     case remoteServer
+     case simulationCreate
+     case locationSet
+@@ -21,6 +22,7 @@ enum LocationEngineError: LocalizedError {
+         case .invalidIP: return "Tunnel IP is invalid. Check Settings → Tunnel IP (usually 10.7.0.1)."
+         case .pairingRead: return "Could not read the RPPairing file. Generate one with idevice_pair in RPPairing mode."
+         case .tunnelCreate: return "Could not open the developer tunnel. Check that the loopback tunnel is connected — Locus' own, or the LocalDevVPN app — and try the first teleport on Wi‑Fi."
++        case .tunnelCreateDetails(let details): return "Could not open the developer tunnel. \(details) Check LocalDevVPN, Wi-Fi, and the Remote Pairing port in XS Location diagnostics."
+         case .remoteServer: return "Connected to the tunnel but RemoteXPC handshake failed."
+         case .simulationCreate: return "Could not open Apple’s location simulation service."
+         case .locationSet: return "Failed to set simulated coordinates."
+@@ -64,6 +66,9 @@ enum LocationEngine {
+     private static let simulationCreate: Int32 = 10
+     private static let locationSet: Int32 = 11
+     private static let locationClear: Int32 = 12
++    /// Only touched by the serial FFI queue, for a useful error instead of a
++    /// generic 'tunnel not open' message that hides the actual socket failure.
++    private static var lastTunnelFailure: String?
+ 
+     static var isSessionActive: Bool {
+         switch SpoofBackend.current {
+@@ -124,12 +129,19 @@ enum LocationEngine {
+         if backend == .network {
+             return await NetworkSpoofer.shared.set(latitude: latitude, longitude: longitude)
+         }
++        let ports = await RemotePairingPortDiscovery.shared.candidatePorts(peerIP: deviceIP)
+         let developer: Result<Void, LocationEngineError> = await withCheckedContinuation { continuation in
+             queue.async {
+-                let code = setLocked(latitude: latitude, longitude: longitude, pairingPath: pairingPath, deviceIP: deviceIP)
+-                continuation.resume(returning: code == ok ? .success(()) : .failure(.from(code: code)))
++                let code = setLocked(latitude: latitude, longitude: longitude, pairingPath: pairingPath, deviceIP: deviceIP, ports: ports)
++                let failure = code == tunnelCreate
++                    ? LocationEngineError.tunnelCreateDetails(lastTunnelFailure ?? "Unknown tunnel error.")
++                    : LocationEngineError.from(code: code)
++                continuation.resume(returning: code == ok ? .success(()) : .failure(failure))
+             }
+         }
++        if case .failure(.tunnelCreateDetails(_)) = developer {
++            await RemotePairingPortDiscovery.shared.invalidate()
++        }
+         // In `both` the developer service is what the fix depends on, so its
+         // result is the answer; network mode is best-effort underneath and its
+         // failures show up in Settings › Network mode rather than stopping a
+@@ -156,6 +168,7 @@ enum LocationEngine {
+         if backend == .network {
+             return await NetworkSpoofer.shared.clear()
+         }
++        let ports = await RemotePairingPortDiscovery.shared.candidatePorts(peerIP: deviceIP)
+ 
+         // The developer service first: it is what puts the real position back,
+         // and it answers in a moment. Turning network mode off waits out the DNS
+@@ -163,10 +176,16 @@ enum LocationEngine {
+         // the Stop rather than holding the button up.
+         let developer: Result<Void, LocationEngineError> = await withCheckedContinuation { continuation in
+             queue.async {
+-                let code = clearLocked(pairingPath: pairingPath, deviceIP: deviceIP)
+-                continuation.resume(returning: code == ok ? .success(()) : .failure(.from(code: code)))
++                let code = clearLocked(pairingPath: pairingPath, deviceIP: deviceIP, ports: ports)
++                let failure = code == tunnelCreate
++                    ? LocationEngineError.tunnelCreateDetails(lastTunnelFailure ?? "Unknown tunnel error.")
++                    : LocationEngineError.from(code: code)
++                continuation.resume(returning: code == ok ? .success(()) : .failure(failure))
+             }
+         }
++        if case .failure(.tunnelCreateDetails(_)) = developer {
++            await RemotePairingPortDiscovery.shared.invalidate()
++        }
+         if networkInvolved {
+             Task { _ = await NetworkSpoofer.shared.clear() }
+         }
+@@ -192,7 +211,7 @@ enum LocationEngine {
+         }
+     }
+ 
+-    private static func setLocked(latitude: Double, longitude: Double, pairingPath: String, deviceIP: String) -> Int32 {
++    private static func setLocked(latitude: Double, longitude: Double, pairingPath: String, deviceIP: String, ports: [UInt16]) -> Int32 {
+         if let locationSimulation {
+             if let err = location_simulation_set(locationSimulation, latitude, longitude) {
+                 idevice_error_free(err)
+@@ -202,7 +221,7 @@ enum LocationEngine {
+             }
+         }
+ 
+-        let connected = connectLocked(pairingPath: pairingPath, deviceIP: deviceIP)
++        let connected = connectLocked(pairingPath: pairingPath, deviceIP: deviceIP, ports: ports)
+         guard connected == ok else { return connected }
+ 
+         if let setError = location_simulation_set(locationSimulation, latitude, longitude) {
+@@ -215,10 +234,9 @@ enum LocationEngine {
+ 
+     /// A fresh developer session: tunnel handshake, RemoteXPC, the simulation
+     /// service. Leaves `locationSimulation` set on success.
+-    private static func connectLocked(pairingPath: String, deviceIP: String) -> Int32 {
++    private static func connectLocked(pairingPath: String, deviceIP: String, ports: [UInt16]) -> Int32 {
+         var address = sockaddr_in()
+         address.sin_family = sa_family_t(AF_INET)
+-        address.sin_port = in_port_t(49152).bigEndian
+         let inetResult = deviceIP.withCString { inet_pton(AF_INET, $0, &address.sin_addr) }
+         guard inetResult == 1 else { return invalidIP }
+ 
+@@ -230,25 +248,35 @@ enum LocationEngine {
+         guard let pairingHandle else { return pairingRead }
+         defer { rp_pairing_file_free(pairingHandle) }
+ 
+-        let providerError = withUnsafePointer(to: &address) { pointer in
+-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+-                tunnel_create_rppairing(
+-                    $0,
+-                    socklen_t(MemoryLayout<sockaddr_in>.stride),
+-                    "LocusLocation",
+-                    pairingHandle,
+-                    nil,
+-                    nil,
+-                    &adapter,
+-                    &handshake
+-                )
++        lastTunnelFailure = nil
++        for port in ports {
++            address.sin_port = in_port_t(port).bigEndian
++            let providerError = withUnsafePointer(to: &address) { pointer in
++                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
++                    tunnel_create_rppairing(
++                        $0,
++                        socklen_t(MemoryLayout<sockaddr_in>.stride),
++                        "LocusLocation",
++                        pairingHandle,
++                        nil,
++                        nil,
++                        &adapter,
++                        &handshake
++                    )
++                }
+             }
++            if let providerError {
++                let reason = providerError.pointee.message.map { String(cString: $0) }
++                    ?? "Error \(providerError.pointee.code)/\(providerError.pointee.sub_code)"
++                lastTunnelFailure = "\(deviceIP):\(port) — \(reason)."
++                idevice_error_free(providerError)
++                cleanup()
++                continue
++            }
++            lastTunnelFailure = nil
++            break
+         }
+-        if let providerError {
+-            idevice_error_free(providerError)
+-            cleanup()
+-            return tunnelCreate
+-        }
++        guard adapter != nil, handshake != nil else { return tunnelCreate }
+ 
+         if let remoteServerError = remote_server_connect_rsd(adapter, handshake, &remoteServer) {
+             idevice_error_free(remoteServerError)
+@@ -280,7 +308,7 @@ enum LocationEngine {
+     /// handle goes stale whenever the tunnel restarts or the app is relaunched
+     /// mid-spoof, but the device keeps simulating — so "no handle" or "the
+     /// handle failed" mean "connect and clear", not "nothing to do".
+-    private static func clearLocked(pairingPath: String?, deviceIP: String) -> Int32 {
++    private static func clearLocked(pairingPath: String?, deviceIP: String, ports: [UInt16]) -> Int32 {
+         if let locationSimulation {
+             let err = location_simulation_clear(locationSimulation)
+             cleanup()
+@@ -289,7 +317,7 @@ enum LocationEngine {
+         }
+         guard let pairingPath else { return locationClear }
+ 
+-        let connected = connectLocked(pairingPath: pairingPath, deviceIP: deviceIP)
++        let connected = connectLocked(pairingPath: pairingPath, deviceIP: deviceIP, ports: ports)
+         guard connected == ok, let locationSimulation else { return connected == ok ? locationClear : connected }
+         let err = location_simulation_clear(locationSimulation)
+         cleanup()
 diff --git a/Locus/Engine/PairOnDeviceService.swift b/Locus/Engine/PairOnDeviceService.swift
 index 192345c..ef6f95d 100644
 --- a/Locus/Engine/PairOnDeviceService.swift
@@ -363,6 +543,164 @@ index b8c411f..d906679 100644
              types.append(custom)
          }
          return types
+diff --git a/Locus/Engine/RemotePairingPortDiscovery.swift b/Locus/Engine/RemotePairingPortDiscovery.swift
+new file mode 100644
+index 0000000..3a396c9
+--- /dev/null
++++ b/Locus/Engine/RemotePairingPortDiscovery.swift
+@@ -0,0 +1,152 @@
++import Foundation
++import Network
++
++/// iOS 27 can advertise remotepairingd on an ephemeral TCP port instead of
++/// 49152. Discover it using the same Bonjour service as the host-side tools.
++/// The user can supply an override in the diagnostics sheet if mDNS is blocked.
++@MainActor
++final class RemotePairingPortDiscovery: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
++    static let shared = RemotePairingPortDiscovery()
++    static let overrideKey = "xs.remotePairingPort"
++    static let legacyPort: UInt16 = 49152
++
++    private var browser: NetServiceBrowser?
++    private var services: [NetService] = []
++    private var found: Set<UInt16> = []
++    private var continuation: CheckedContinuation<[UInt16], Never>?
++    private var timeoutTask: Task<Void, Never>?
++
++    private(set) var lastDiscovered: [UInt16] = []
++    private(set) var lastSelected: UInt16 = legacyPort
++    private var cachedPeer: String?
++    private var cachedPorts: [UInt16] = []
++    private var cachedOverride: UInt16?
++
++    static var manualPort: UInt16? {
++        let value = UserDefaults.standard.integer(forKey: overrideKey)
++        guard (1...65535).contains(value) else { return nil }
++        return UInt16(value)
++    }
++
++    func discover(timeout: TimeInterval = 3.5) async -> [UInt16] {
++        // A single browser at a time, including the user-triggered diagnostics.
++        guard continuation == nil else { return lastDiscovered }
++        return await withCheckedContinuation { continuation in
++            self.continuation = continuation
++            self.found.removeAll()
++            self.services.removeAll()
++
++            let browser = NetServiceBrowser()
++            browser.delegate = self
++            self.browser = browser
++            browser.searchForServices(ofType: "_remotepairing._tcp.", inDomain: "local.")
++
++            timeoutTask = Task { @MainActor in
++                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
++                finish()
++            }
++        }
++    }
++
++    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
++        service.delegate = self
++        services.append(service)
++        service.resolve(withTimeout: 2.5)
++    }
++
++    func netServiceDidResolveAddress(_ sender: NetService) {
++        guard (1...65535).contains(sender.port) else { return }
++        found.insert(UInt16(sender.port))
++        // Let the browser run until its short timeout to include other devices.
++    }
++
++    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
++        finish()
++    }
++
++    func netServiceBrowserDidStopSearch(_ browser: NetServiceBrowser) {
++        // `finish()` calls stop; never resume the continuation twice.
++    }
++
++    private func finish() {
++        guard let continuation else { return }
++        self.continuation = nil
++        timeoutTask?.cancel()
++        timeoutTask = nil
++        browser?.stop()
++        browser = nil
++        services.forEach { $0.stop() }
++        services.removeAll()
++        lastDiscovered = found.sorted()
++        continuation.resume(returning: lastDiscovered)
++    }
++
++    /// Prefer ports that actually accept TCP on the loopback peer. A VPN icon
++    /// and an IPv4 utun address alone don't establish this readiness.
++    func candidatePorts(peerIP: String) async -> [UInt16] {
++        // Routes send several fixes per second. The port may be discovered once
++        // per connection, not before every location update.
++        if cachedPeer == peerIP, !cachedPorts.isEmpty,
++           cachedOverride == Self.manualPort {
++            return cachedPorts
++        }
++        let advertised: [UInt16]
++        if let manual = Self.manualPort {
++            advertised = [manual]
++        } else {
++            advertised = await discover()
++        }
++
++        var candidates = advertised
++        if !candidates.contains(Self.legacyPort) { candidates.append(Self.legacyPort) }
++
++        var responding: [UInt16] = []
++        for port in candidates {
++            if await RemotePairingPortProbe.acceptsTCP(host: peerIP, port: port) {
++                responding.append(port)
++            }
++        }
++
++        // If every probe failed, still attempt the best candidate through
++        // idevice: Network.framework can report a transient false negative.
++        let selected = responding.isEmpty ? [candidates[0]] : responding
++        lastSelected = selected[0]
++        cachedPeer = peerIP
++        cachedPorts = selected
++        cachedOverride = Self.manualPort
++        return selected
++    }
++
++    func invalidate() {
++        cachedPeer = nil
++        cachedPorts = []
++    }
++}
++
++/// Keeps a single TCP probe bounded at 1.5s. All its callbacks run on one
++/// private serial queue so the continuation is only resumed once.
++private enum RemotePairingPortProbe {
++    static func acceptsTCP(host: String, port: UInt16) async -> Bool {
++        guard let endpointPort = NWEndpoint.Port(rawValue: port) else { return false }
++        return await withCheckedContinuation { continuation in
++            let queue = DispatchQueue(label: "com.hso0ooni.xslocation.port-probe")
++            let connection = NWConnection(host: NWEndpoint.Host(host), port: endpointPort, using: .tcp)
++            var finished = false
++            let complete: (Bool) -> Void = { success in
++                guard !finished else { return }
++                finished = true
++                connection.cancel()
++                continuation.resume(returning: success)
++            }
++            connection.stateUpdateHandler = { state in
++                switch state {
++                case .ready: complete(true)
++                case .failed, .cancelled: complete(false)
++                default: break
++                }
++            }
++            connection.start(queue: queue)
++            queue.asyncAfter(deadline: .now() + 1.5) { complete(false) }
++        }
++    }
++}
 diff --git a/Locus/Engine/SpoofBackend.swift b/Locus/Engine/SpoofBackend.swift
 index 1a6626b..f40a9e5 100644
 --- a/Locus/Engine/SpoofBackend.swift
@@ -665,10 +1003,10 @@ index 0000000..561cea6
 +}
 diff --git a/Locus/Features/XS/XSRootView.swift b/Locus/Features/XS/XSRootView.swift
 new file mode 100644
-index 0000000..a83dd4c
+index 0000000..bafd78c
 --- /dev/null
 +++ b/Locus/Features/XS/XSRootView.swift
-@@ -0,0 +1,594 @@
+@@ -0,0 +1,650 @@
 +import CoreLocation
 +import MapKit
 +import SwiftUI
@@ -1025,8 +1363,8 @@ index 0000000..a83dd4c
 +            setupRow(2,
 +                     title: tr("شغّل LocalDevVPN", "Connect LocalDevVPN"),
 +                     description: vpnUp
-+                        ? tr("تأكد أنك متصل بشبكة Wi-Fi. النفق المحلي جاهز؛ إذا انقطع، ارجع لتطبيق LocalDevVPN وشغّله.",
-+                             "Make sure you're connected to Wi-Fi. The local tunnel is ready; if it disconnects, reopen LocalDevVPN and connect again.")
++                        ? tr("تم رصد اتصال LocalDevVPN. خلك متصل بشبكة Wi-Fi؛ التطبيق بيفحص منفذ المطوّر وقت التفعيل.",
++                             "LocalDevVPN was detected. Stay on Wi-Fi; the developer service port is checked on activation.")
 +                        : tr("أول شيء اتصل بشبكة Wi-Fi. بعدها ثبّت LocalDevVPN من App Store إذا ما عندك، وافتحه واضغط Connect ووافق على إضافة VPN، ثم ارجع هنا.",
 +                             "First connect to Wi-Fi. Then install LocalDevVPN from the App Store if needed, open it, tap Connect, approve the VPN configuration, and return here."),
 +                     success: vpnUp) {
@@ -1093,7 +1431,7 @@ index 0000000..a83dd4c
 +                    Text(title).font(.system(size: 16, weight: .bold))
 +                    Spacer(minLength: 0)
 +                    if success {
-+                        Text(tr("جاهز", "Ready"))
++                        Text(number == 2 ? tr("VPN متصل", "VPN connected") : tr("جاهز", "Ready"))
 +                            .font(.system(size: 11, weight: .bold))
 +                            .foregroundStyle(mint)
 +                    }
@@ -1236,6 +1574,10 @@ index 0000000..a83dd4c
 +    let arabic: Bool
 +    @Environment(\.dismiss) private var dismiss
 +    @StateObject private var pairing = PairingStore.shared
++    @State private var remotePort = ""
++    @State private var detectedPort: String?
++    @State private var portError: String?
++    @State private var scanning = false
 +
 +    private func tr(_ ar: String, _ en: String) -> String { arabic ? ar : en }
 +
@@ -1251,6 +1593,55 @@ index 0000000..a83dd4c
 +                        pairing.refresh()
 +                    }
 +                }
++                Section(tr("منفذ الاقتران عن بُعد", "Remote Pairing port")) {
++                    LabeledContent(tr("عنوان الاتصال", "Tunnel peer"), value: TunnelConfig.targetIP)
++                    LabeledContent(tr("المنفذ المستخدم", "Port used"),
++                                   value: String(RemotePairingPortDiscovery.shared.lastSelected))
++                    if let detectedPort {
++                        LabeledContent(tr("نتيجة البحث", "Bonjour discovery"), value: detectedPort)
++                    }
++                    Button {
++                        scanning = true
++                        Task {
++                            let ports = await RemotePairingPortDiscovery.shared.discover()
++                            detectedPort = ports.isEmpty
++                                ? tr("لم يتم العثور على منفذ", "No port discovered")
++                                : ports.map { String($0) }.joined(separator: ", ")
++                            scanning = false
++                        }
++                    } label: {
++                        if scanning { ProgressView() }
++                        else { Label(tr("اكتشاف المنفذ تلقائيًا", "Discover port automatically"), systemImage: "network") }
++                    }
++                    .disabled(scanning)
++
++                    Text(tr("إذا ما اشتغل التفعيل، تقدر تدخل منفذ Remote Pairing من إعدادات الشبكة المتقدمة. اتركه فارغًا للاكتشاف التلقائي (49152 احتياطيًا).",
++                            "If activation fails, enter the Remote Pairing port manually. Leave blank to discover automatically (49152 fallback)."))
++                        .font(.caption)
++                        .foregroundStyle(.secondary)
++
++                    HStack {
++                        TextField(tr("تلقائي", "Automatic"), text: $remotePort)
++                            .keyboardType(.numberPad)
++                        Button(tr("حفظ", "Save")) {
++                            let trimmed = remotePort.trimmingCharacters(in: .whitespacesAndNewlines)
++                            if trimmed.isEmpty {
++                                UserDefaults.standard.removeObject(forKey: RemotePairingPortDiscovery.overrideKey)
++                                portError = nil
++                            } else if let value = Int(trimmed), (1...65535).contains(value) {
++                                UserDefaults.standard.set(value, forKey: RemotePairingPortDiscovery.overrideKey)
++                                portError = nil
++                            } else {
++                                portError = tr("ادخل رقم منفذ بين 1 و 65535", "Enter a port between 1 and 65535")
++                                return
++                            }
++                            RemotePairingPortDiscovery.shared.invalidate()
++                        }
++                    }
++                    if let portError {
++                        Text(portError).font(.caption).foregroundStyle(.red)
++                    }
++                }
 +                Section(tr("مهم", "Important")) {
 +                    Text(tr("مجرد اتصال الـVPN أو حفظ الإحداثيات ما يعني أن نظام iOS استخدم الموقع الجديد. افحص الموقع من تطبيق الخرائط.",
 +                            "A connected VPN or saved pin does not prove iOS adopted the new location. Verify with Maps."))
@@ -1260,6 +1651,9 @@ index 0000000..a83dd4c
 +            }
 +            .navigationTitle("XS Location")
 +            .toolbar { ToolbarItem(placement: .confirmationAction) { Button(tr("تم", "Done")) { dismiss() } } }
++            .onAppear {
++                remotePort = RemotePairingPortDiscovery.manualPort.map { String($0) } ?? ""
++            }
 +        }
 +    }
 +}
@@ -1394,21 +1788,22 @@ index d1d2318..42ba8af 100644
      private static let maxBytes = 64 * 1024
 diff --git a/README-XS.md b/README-XS.md
 new file mode 100644
-index 0000000..7de7f8e
+index 0000000..4adf931
 --- /dev/null
 +++ b/README-XS.md
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,63 @@
 +# XS Location — iPhone & iPad location testing
 +
 +تطبيق iOS / iPadOS أصلي بواجهة **SwiftUI**، باللغة العربية والإنجليزية، مع تجربة مبسطة لطريقة **LocalDevVPN فقط**. بني على مشروع [Locus](https://github.com/ElProfessorFRidg/locus) مفتوح المصدر (MIT)، مع الاحتفاظ بإسناد الرخصة الأصلي في ملف `LICENSE`.
 +
-+## تجربة XS Location 2.1.1
++## تجربة XS Location 2.1.2
 +
 +- **LocalDevVPN** هو المسار الوحيد الظاهر في الواجهة؛ تمت إزالة اختيار Network / Wi‑Fi / الأبراج وتدفق شهادته من التجربة الأساسية، من دون تغيير المحرك الأصلي للمشروع.
 +- **شرط مهم:** اتصل بشبكة Wi-Fi قبل تفعيل تغيير الموقع؛ بيانات الشريحة وحدها غير كافية. يظهر هذا التنبيه بوضوح في الواجهة وخطوة LocalDevVPN. إزالة خيار Wi-Fi القديم تعني إزالة *طريقة المحاكاة المنفصلة*، وليس إلغاء الحاجة لاتصال واي فاي.
 +- خريطة أكبر ومتجاوبة: لوحة الإعداد تظهر فوق الخريطة في الآيفون والآيباد، وتكون الخريطة آخر خطوة تحت التعليمات حتى في الوضع الأفقي.
 +- ثلاث خطوات واضحة: الاقتران، تشغيل LocalDevVPN، تحديد الموقع ثم التشغيل.
 +- اكتشاف LocalDevVPN مستعاد من طريقة Locus 1.0.2 في قراءة عناوين واجهات الشبكة، مع دعم عناوين `10.7.0.x` و`10.7.1.x` وتحديث الحالة تلقائياً كل ثانيتين. شارة الأعلى توضّح حالة **تغيير الموقع** بشكل مستقل عن VPN.
++- **إصلاح منفذ الاتصال على iOS 27:** اكتشاف خدمة `_remotepairing._tcp` عبر Bonjour بدل افتراض أن منفذ المطور دائمًا `49152`، مع اختبار TCP قبل فتح الجلسة، واحتياط للمنفذ القديم، وخيار تحديد المنفذ يدويًا داخل صفحة التشخيص. عند الفشل يظهر سبب الاتصال من محرك idevice وعنوان المنفذ المستهدف لمساعدة التشخيص.
 +- واجهة ثنائية اللغة، زر تشغيل/إيقاف ثابت، اختيار خريطة عادية أو قمر صناعي، وحالة اتصال مُحدّثة عند الرجوع من الإعدادات.
 +
 +**مهم:** لا يعني نجاح الاقتران أو اتصال VPN أن كل تطبيق سيقبل الموقع المحاكى. تأكّد من النتيجة في تطبيق الخرائط.
@@ -1494,7 +1889,7 @@ index e300357..5977ee7 100644
  	</array>
  	<key>com.apple.security.exception.files.absolute-path.read-only</key>
 diff --git a/project.yml b/project.yml
-index e060e3c..9ac0c0f 100644
+index e060e3c..ea7f65a 100644
 --- a/project.yml
 +++ b/project.yml
 @@ -16,8 +16,8 @@ settings:
@@ -1503,8 +1898,8 @@ index e060e3c..9ac0c0f 100644
      IPHONEOS_DEPLOYMENT_TARGET: "17.0"
 -    MARKETING_VERSION: "1.3.0"
 -    CURRENT_PROJECT_VERSION: "6"
-+    MARKETING_VERSION: "2.1.1"
-+    CURRENT_PROJECT_VERSION: "3"
++    MARKETING_VERSION: "2.1.2"
++    CURRENT_PROJECT_VERSION: "4"
  targets:
    Locus:
      type: application
