@@ -387,14 +387,14 @@ index 1a6626b..f40a9e5 100644
                  ?? SpoofBackend.network.readinessProblem(pairing: pairing)
 diff --git a/Locus/Features/XS/XSPairOnDeviceView.swift b/Locus/Features/XS/XSPairOnDeviceView.swift
 new file mode 100644
-index 0000000..c6880e6
+index 0000000..561cea6
 --- /dev/null
 +++ b/Locus/Features/XS/XSPairOnDeviceView.swift
 @@ -0,0 +1,201 @@
 +import SwiftUI
 +
-+/// XS Location's iOS 27 pairing wizard. The host starts advertising as soon as
-+/// this sheet opens; iOS still requires the owner to approve the six-digit code.
++/// XS Location's iOS 27 / iPadOS 27 pairing wizard. The host advertises as
++/// soon as this sheet opens; the owner still approves the six-digit code.
 +struct XSPairOnDeviceView: View {
 +    @EnvironmentObject private var pairing: PairingStore
 +    @Environment(\.dismiss) private var dismiss
@@ -486,7 +486,7 @@ index 0000000..c6880e6
 +
 +            case .deviceConnected:
 +                ProgressView().tint(blue)
-+                Text(tr("تم الاتصال بالآيفون", "Connected to this iPhone"))
++                Text(tr("تم الاتصال بالجهاز", "Connected to this device"))
 +                    .font(.headline)
 +                Text(tr("جاري إنشاء رمز من ٦ أرقام…", "Generating your six-digit code…"))
 +                    .font(.subheadline)
@@ -1309,7 +1309,7 @@ index d1d2318..42ba8af 100644
      private static let maxBytes = 64 * 1024
 diff --git a/README-XS.md b/README-XS.md
 new file mode 100644
-index 0000000..76ddc2c
+index 0000000..e1fa8e6
 --- /dev/null
 +++ b/README-XS.md
 @@ -0,0 +1,60 @@
@@ -1363,7 +1363,7 @@ index 0000000..76ddc2c
 +
 +- `Locus/Features/XS/XSRootView.swift` — واجهة LocalDevVPN المبسطة والخريطة المتجاوبة على الآيفون والآيباد.
 +- `Locus/Engine/SpoofSession.swift` — ربط التشغيل والإيقاف بالمحرك.
-+- `Locus/Features/XS/XSPairOnDeviceView.swift` — شاشة الاقتران التلقائي من نفس الآيفون على iOS 27؛ توليد الرمز والحفظ عبر `PairOnDeviceService`.
++- `Locus/Features/XS/XSPairOnDeviceView.swift` — شاشة الاقتران التلقائي من نفس الآيفون أو الآيباد على iOS / iPadOS 27؛ توليد الرمز والحفظ عبر `PairOnDeviceService`.
 +- `Locus/Engine/LocationEngine.swift` — خدمة موقع المطور.
 +- `Locus/Engine/NetworkSpoofer.swift` — محرك من المشروع الأصلي غير ظاهر كخيار داخل واجهة XS.
 +- `LocusTunnel` — إضافة Packet Tunnel الموروثة من المشروع الأصلي.
