@@ -594,10 +594,10 @@ index 0000000..561cea6
 +}
 diff --git a/Locus/Features/XS/XSRootView.swift b/Locus/Features/XS/XSRootView.swift
 new file mode 100644
-index 0000000..7d01bd6
+index 0000000..3297fc9
 --- /dev/null
 +++ b/Locus/Features/XS/XSRootView.swift
-@@ -0,0 +1,580 @@
+@@ -0,0 +1,602 @@
 +import CoreLocation
 +import MapKit
 +import SwiftUI
@@ -707,6 +707,7 @@ index 0000000..7d01bd6
 +        VStack(alignment: .leading, spacing: 20) {
 +            header
 +            introduction
++            wifiRequirement
 +
 +            if isWidePad {
 +                HStack(alignment: .top, spacing: 20) {
@@ -779,6 +780,27 @@ index 0000000..7d01bd6
 +                .foregroundStyle(.secondary)
 +                .fixedSize(horizontal: false, vertical: true)
 +        }
++    }
++
++    private var wifiRequirement: some View {
++        HStack(alignment: .top, spacing: 11) {
++            Image(systemName: "wifi")
++                .font(.system(size: 19, weight: .bold))
++                .foregroundStyle(Color.orange)
++                .frame(width: 26)
++            VStack(alignment: .leading, spacing: 4) {
++                Text(tr("مهم: اتصال Wi-Fi مطلوب", "Important: Wi-Fi connection required"))
++                    .font(.system(size: 14, weight: .bold))
++                Text(tr("لازم يكون جهازك متصل بشبكة واي فاي قبل تغيير الموقع. بيانات الجوال وحدها ما تكفي.",
++                        "Connect your device to a Wi-Fi network before changing location. Cellular data alone is not enough."))
++                    .font(.system(size: 13))
++                    .fixedSize(horizontal: false, vertical: true)
++            }
++        }
++        .padding(14)
++        .frame(maxWidth: .infinity, alignment: .leading)
++        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 17))
++        .accessibilityElement(children: .combine)
 +    }
 +
 +    private var statusBadge: some View {
@@ -940,10 +962,10 @@ index 0000000..7d01bd6
 +            setupRow(2,
 +                     title: tr("شغّل LocalDevVPN", "Connect LocalDevVPN"),
 +                     description: vpnUp
-+                        ? tr("اتصال النفق المحلي جاهز. إذا انقطع، ارجع لتطبيق LocalDevVPN وشغّله.",
-+                             "The local tunnel is ready. If it disconnects, reopen LocalDevVPN and connect again.")
-+                        : tr("إذا ما عندك LocalDevVPN، ثبّته من App Store. افتحه واضغط Connect، ووافق على طلب إضافة VPN. بعدها ارجع لـ XS Location.",
-+                             "Install LocalDevVPN from the App Store if needed. Open it, tap Connect, approve the VPN configuration, then come back to XS Location."),
++                        ? tr("تأكد أنك متصل بشبكة Wi-Fi. النفق المحلي جاهز؛ إذا انقطع، ارجع لتطبيق LocalDevVPN وشغّله.",
++                             "Make sure you're connected to Wi-Fi. The local tunnel is ready; if it disconnects, reopen LocalDevVPN and connect again.")
++                        : tr("أول شيء اتصل بشبكة Wi-Fi. بعدها ثبّت LocalDevVPN من App Store إذا ما عندك، وافتحه واضغط Connect ووافق على إضافة VPN، ثم ارجع هنا.",
++                             "First connect to Wi-Fi. Then install LocalDevVPN from the App Store if needed, open it, tap Connect, approve the VPN configuration, and return here."),
 +                     success: vpnUp) {
 +                HStack(spacing: 10) {
 +                    Button {
@@ -1309,10 +1331,10 @@ index d1d2318..42ba8af 100644
      private static let maxBytes = 64 * 1024
 diff --git a/README-XS.md b/README-XS.md
 new file mode 100644
-index 0000000..e1fa8e6
+index 0000000..dbb1d8a
 --- /dev/null
 +++ b/README-XS.md
-@@ -0,0 +1,60 @@
+@@ -0,0 +1,61 @@
 +# XS Location — iPhone & iPad location testing
 +
 +تطبيق iOS / iPadOS أصلي بواجهة **SwiftUI**، باللغة العربية والإنجليزية، مع تجربة مبسطة لطريقة **LocalDevVPN فقط**. بني على مشروع [Locus](https://github.com/ElProfessorFRidg/locus) مفتوح المصدر (MIT)، مع الاحتفاظ بإسناد الرخصة الأصلي في ملف `LICENSE`.
@@ -1320,6 +1342,7 @@ index 0000000..e1fa8e6
 +## تجربة XS Location 2.1
 +
 +- **LocalDevVPN** هو المسار الوحيد الظاهر في الواجهة؛ تمت إزالة اختيار Network / Wi‑Fi / الأبراج وتدفق شهادته من التجربة الأساسية، من دون تغيير المحرك الأصلي للمشروع.
++- **شرط مهم:** اتصل بشبكة Wi-Fi قبل تفعيل تغيير الموقع؛ بيانات الشريحة وحدها غير كافية. يظهر هذا التنبيه بوضوح في الواجهة وخطوة LocalDevVPN. إزالة خيار Wi-Fi القديم تعني إزالة *طريقة المحاكاة المنفصلة*، وليس إلغاء الحاجة لاتصال واي فاي.
 +- خريطة أكبر ومتجاوبة: على الآيفون ارتفاع مرن، وعلى الآيباد ارتفاع ومساحة أكبر مع تخطيط جانبي في الوضع الأفقي.
 +- ثلاث خطوات واضحة: الاقتران، تشغيل LocalDevVPN، تحديد الموقع ثم التشغيل.
 +- واجهة ثنائية اللغة، زر تشغيل/إيقاف ثابت، اختيار خريطة عادية أو قمر صناعي، وحالة اتصال مُحدّثة عند الرجوع من الإعدادات.
