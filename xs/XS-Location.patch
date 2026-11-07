@@ -385,6 +385,77 @@ index 1a6626b..f40a9e5 100644
          case .both:
              return SpoofBackend.developer.readinessProblem(pairing: pairing)
                  ?? SpoofBackend.network.readinessProblem(pairing: pairing)
+diff --git a/Locus/Engine/TunnelController.swift b/Locus/Engine/TunnelController.swift
+index 73e970e..e166bb8 100644
+--- a/Locus/Engine/TunnelController.swift
++++ b/Locus/Engine/TunnelController.swift
+@@ -151,21 +151,19 @@ final class TunnelController: ObservableObject {
+         return found
+     }
+ 
+-    /// True when the loopback address is already reachable, whoever put it there
+-    /// — Locus' own tunnel or the LocalDevVPN app. This is what the rest of the
+-    /// app asks before deciding a teleport can go ahead.
+-    ///
+-    /// Compared as 32-bit integers rather than as text. The status bar polls this
+-    /// every two seconds for as long as Locus is on screen, and the previous
+-    /// version ran every interface on the device through `getnameinfo` into a
+-    /// 1 KB buffer and built a `String` from each one — dozens of allocations a
+-    /// second to answer a question that is one compare per interface.
++    /// Checks the tunnel interface the same way Locus 1.0.2 did: enumerate
++    /// numeric IPv4 addresses instead of relying on the newer integer conversion.
++    /// LocalDevVPN may assign 10.7.1.x to its interface while using 10.7.0.1 as
++    /// the peer, so both default ranges must be recognized.
+     nonisolated static var loopbackReachable: Bool {
+-        guard let target = ipv4Value(TunnelConfig.targetIP) else { return false }
+-        // Either end of the tunnel's /24 counts: LocalDevVPN numbers its own end
+-        // differently, and either address being present means the utun is up.
+-        let subnet = target & 0xFFFF_FF00
+-        return hasIPv4Address { $0 == target || $0 & 0xFFFF_FF00 == subnet }
++        let target = TunnelConfig.targetIP
++        let octets = target.split(separator: ".")
++        guard octets.count == 4 else { return false }
++        let prefix = octets.dropLast().joined(separator: ".") + "."
++        return ipv4InterfaceAddresses().contains { address in
++            address == target || address.hasPrefix(prefix)
++                || (TunnelConfig.isDefault && address.hasPrefix("10.7.1."))
++        }
+     }
+ 
+     // MARK: - Connecting
+@@ -672,6 +670,32 @@ final class TunnelController: ObservableObject {
+ 
+     // MARK: - Interface enumeration
+ 
++    /// Mirrors the IP inspection used by Locus 1.0.2, including its numeric
++    /// address formatting; unlike status-bar VPN icons this checks an actual
++    /// IPv4 interface on the device.
++    nonisolated static func ipv4InterfaceAddresses() -> [String] {
++        var head: UnsafeMutablePointer<ifaddrs>?
++        guard getifaddrs(&head) == 0, head != nil else { return [] }
++        defer { freeifaddrs(head) }
++
++        var addresses: [String] = []
++        var cursor = head
++        while let current = cursor {
++            cursor = current.pointee.ifa_next
++            guard let address = current.pointee.ifa_addr,
++                  address.pointee.sa_family == UInt8(AF_INET) else { continue }
++
++            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
++            let result = getnameinfo(address,
++                                     socklen_t(MemoryLayout<sockaddr_in>.size),
++                                     &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
++            if result == 0 {
++                addresses.append(String(cString: host))
++            }
++        }
++        return addresses
++    }
++
+     /// Whether any interface carries an IPv4 address `matches` accepts, as a
+     /// host-order 32-bit value. Allocates nothing.
+     nonisolated static func hasIPv4Address(_ matches: (UInt32) -> Bool) -> Bool {
 diff --git a/Locus/Features/XS/XSPairOnDeviceView.swift b/Locus/Features/XS/XSPairOnDeviceView.swift
 new file mode 100644
 index 0000000..561cea6
@@ -594,10 +665,10 @@ index 0000000..561cea6
 +}
 diff --git a/Locus/Features/XS/XSRootView.swift b/Locus/Features/XS/XSRootView.swift
 new file mode 100644
-index 0000000..4f49151
+index 0000000..a83dd4c
 --- /dev/null
 +++ b/Locus/Features/XS/XSRootView.swift
-@@ -0,0 +1,590 @@
+@@ -0,0 +1,594 @@
 +import CoreLocation
 +import MapKit
 +import SwiftUI
@@ -686,6 +757,9 @@ index 0000000..4f49151
 +            .onAppear { initialize() }
 +            .onChange(of: scenePhase) { _, phase in
 +                if phase == .active { refresh() }
++            }
++            .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
++                if scenePhase == .active { vpnUp = TunnelController.loopbackReachable }
 +            }
 +            .onReceive(NotificationCenter.default.publisher(for: .locusOpenLocation)) { notification in
 +                guard let link = notification.object as? LocusLocationLink else { return }
@@ -793,7 +867,8 @@ index 0000000..4f49151
 +
 +    private var statusBadge: some View {
 +        let label = session.isBusy ? tr("جاري التشغيل", "Starting")
-+            : session.isSpoofing ? tr("الموقع نشط", "Location active") : tr("غير نشط", "Inactive")
++            : session.isSpoofing ? tr("تغيير الموقع مفعّل", "Location simulation active")
++            : tr("تغيير الموقع متوقف", "Location simulation stopped")
 +        return HStack(spacing: 6) {
 +            Circle().fill(session.isSpoofing ? mint : Color.secondary).frame(width: 8, height: 8)
 +            Text(label).font(.system(size: 12, weight: .semibold))
@@ -1319,20 +1394,21 @@ index d1d2318..42ba8af 100644
      private static let maxBytes = 64 * 1024
 diff --git a/README-XS.md b/README-XS.md
 new file mode 100644
-index 0000000..9bf72b6
+index 0000000..7de7f8e
 --- /dev/null
 +++ b/README-XS.md
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,62 @@
 +# XS Location — iPhone & iPad location testing
 +
 +تطبيق iOS / iPadOS أصلي بواجهة **SwiftUI**، باللغة العربية والإنجليزية، مع تجربة مبسطة لطريقة **LocalDevVPN فقط**. بني على مشروع [Locus](https://github.com/ElProfessorFRidg/locus) مفتوح المصدر (MIT)، مع الاحتفاظ بإسناد الرخصة الأصلي في ملف `LICENSE`.
 +
-+## تجربة XS Location 2.1
++## تجربة XS Location 2.1.1
 +
 +- **LocalDevVPN** هو المسار الوحيد الظاهر في الواجهة؛ تمت إزالة اختيار Network / Wi‑Fi / الأبراج وتدفق شهادته من التجربة الأساسية، من دون تغيير المحرك الأصلي للمشروع.
 +- **شرط مهم:** اتصل بشبكة Wi-Fi قبل تفعيل تغيير الموقع؛ بيانات الشريحة وحدها غير كافية. يظهر هذا التنبيه بوضوح في الواجهة وخطوة LocalDevVPN. إزالة خيار Wi-Fi القديم تعني إزالة *طريقة المحاكاة المنفصلة*، وليس إلغاء الحاجة لاتصال واي فاي.
 +- خريطة أكبر ومتجاوبة: لوحة الإعداد تظهر فوق الخريطة في الآيفون والآيباد، وتكون الخريطة آخر خطوة تحت التعليمات حتى في الوضع الأفقي.
 +- ثلاث خطوات واضحة: الاقتران، تشغيل LocalDevVPN، تحديد الموقع ثم التشغيل.
++- اكتشاف LocalDevVPN مستعاد من طريقة Locus 1.0.2 في قراءة عناوين واجهات الشبكة، مع دعم عناوين `10.7.0.x` و`10.7.1.x` وتحديث الحالة تلقائياً كل ثانيتين. شارة الأعلى توضّح حالة **تغيير الموقع** بشكل مستقل عن VPN.
 +- واجهة ثنائية اللغة، زر تشغيل/إيقاف ثابت، اختيار خريطة عادية أو قمر صناعي، وحالة اتصال مُحدّثة عند الرجوع من الإعدادات.
 +
 +**مهم:** لا يعني نجاح الاقتران أو اتصال VPN أن كل تطبيق سيقبل الموقع المحاكى. تأكّد من النتيجة في تطبيق الخرائط.
@@ -1418,7 +1494,7 @@ index e300357..5977ee7 100644
  	</array>
  	<key>com.apple.security.exception.files.absolute-path.read-only</key>
 diff --git a/project.yml b/project.yml
-index e060e3c..e199b23 100644
+index e060e3c..9ac0c0f 100644
 --- a/project.yml
 +++ b/project.yml
 @@ -16,8 +16,8 @@ settings:
@@ -1427,8 +1503,8 @@ index e060e3c..e199b23 100644
      IPHONEOS_DEPLOYMENT_TARGET: "17.0"
 -    MARKETING_VERSION: "1.3.0"
 -    CURRENT_PROJECT_VERSION: "6"
-+    MARKETING_VERSION: "2.1.0"
-+    CURRENT_PROJECT_VERSION: "2"
++    MARKETING_VERSION: "2.1.1"
++    CURRENT_PROJECT_VERSION: "3"
  targets:
    Locus:
      type: application
