@@ -594,10 +594,10 @@ index 0000000..561cea6
 +}
 diff --git a/Locus/Features/XS/XSRootView.swift b/Locus/Features/XS/XSRootView.swift
 new file mode 100644
-index 0000000..3297fc9
+index 0000000..4f49151
 --- /dev/null
 +++ b/Locus/Features/XS/XSRootView.swift
-@@ -0,0 +1,602 @@
+@@ -0,0 +1,590 @@
 +import CoreLocation
 +import MapKit
 +import SwiftUI
@@ -701,29 +701,17 @@ index 0000000..3297fc9
 +    @ViewBuilder
 +    private func pageContent(in size: CGSize) -> some View {
 +        let isPad = UIDevice.current.userInterfaceIdiom == .pad
-+        let isWidePad = isPad && size.width >= 980
 +        let mapHeight = min(max(size.height * (isPad ? 0.69 : 0.53), isPad ? 520 : 385), isPad ? 780 : 570)
 +
 +        VStack(alignment: .leading, spacing: 20) {
 +            header
 +            introduction
 +            wifiRequirement
-+
-+            if isWidePad {
-+                HStack(alignment: .top, spacing: 20) {
-+                    mapCard(height: mapHeight)
-+                        .frame(maxWidth: .infinity)
-+                    VStack(alignment: .leading, spacing: 15) {
-+                        setupCard
-+                        limitationNote
-+                    }
-+                    .frame(width: min(size.width * 0.33, 375))
-+                }
-+            } else {
-+                mapCard(height: mapHeight)
-+                setupCard
-+                limitationNote
-+            }
++            setupCard
++                .frame(maxWidth: isPad ? 960 : .infinity)
++                .frame(maxWidth: .infinity)
++            mapCard(height: mapHeight)
++            limitationNote
 +        }
 +    }
 +
@@ -770,12 +758,12 @@ index 0000000..3297fc9
 +                Spacer(minLength: 8)
 +                statusBadge
 +            }
-+            Text(tr("حدد مكانك من الخريطة الكبيرة، وبعدها شغّل المحاكاة.",
-+                    "Pick a place on the large map, then start the simulation."))
++            Text(tr("جهّز الاتصال أولاً، وبعدها اختر مكانك على الخريطة.",
++                    "Set up the connection first, then pick a place on the map."))
 +                .font(.system(size: 18, weight: .semibold, design: .rounded))
 +                .fixedSize(horizontal: false, vertical: true)
-+            Text(tr("إعداد LocalDevVPN يتم مرة واحدة. إذا أول مرة تستخدم التطبيق، اتبع الخطوات الواضحة تحت الخريطة.",
-+                    "Set up LocalDevVPN once. New here? Follow the guided steps below the map."))
++            Text(tr("اتبع خطوات الإعداد بالترتيب، وبعدها بتلقى خريطة تحديد الموقع تحتها كآخر خطوة.",
++                    "Follow the setup steps in order. The location-selection map is below them as the final step."))
 +                .font(.subheadline)
 +                .foregroundStyle(.secondary)
 +                .fixedSize(horizontal: false, vertical: true)
@@ -821,7 +809,7 @@ index 0000000..3297fc9
 +    private func mapCard(height: CGFloat) -> some View {
 +        VStack(alignment: .leading, spacing: 12) {
 +            HStack {
-+                sectionTitle(tr("الخريطة — اضغط لاختيار الموقع", "Map — tap to choose a place"), symbol: "mappin.circle")
++                sectionTitle(tr("الخطوة الأخيرة — اختر الموقع على الخريطة", "Final step — choose a location on the map"), symbol: "mappin.circle")
 +                Spacer()
 +                Button {
 +                    satellite.toggle()
@@ -1331,7 +1319,7 @@ index d1d2318..42ba8af 100644
      private static let maxBytes = 64 * 1024
 diff --git a/README-XS.md b/README-XS.md
 new file mode 100644
-index 0000000..dbb1d8a
+index 0000000..9bf72b6
 --- /dev/null
 +++ b/README-XS.md
 @@ -0,0 +1,61 @@
@@ -1343,7 +1331,7 @@ index 0000000..dbb1d8a
 +
 +- **LocalDevVPN** هو المسار الوحيد الظاهر في الواجهة؛ تمت إزالة اختيار Network / Wi‑Fi / الأبراج وتدفق شهادته من التجربة الأساسية، من دون تغيير المحرك الأصلي للمشروع.
 +- **شرط مهم:** اتصل بشبكة Wi-Fi قبل تفعيل تغيير الموقع؛ بيانات الشريحة وحدها غير كافية. يظهر هذا التنبيه بوضوح في الواجهة وخطوة LocalDevVPN. إزالة خيار Wi-Fi القديم تعني إزالة *طريقة المحاكاة المنفصلة*، وليس إلغاء الحاجة لاتصال واي فاي.
-+- خريطة أكبر ومتجاوبة: على الآيفون ارتفاع مرن، وعلى الآيباد ارتفاع ومساحة أكبر مع تخطيط جانبي في الوضع الأفقي.
++- خريطة أكبر ومتجاوبة: لوحة الإعداد تظهر فوق الخريطة في الآيفون والآيباد، وتكون الخريطة آخر خطوة تحت التعليمات حتى في الوضع الأفقي.
 +- ثلاث خطوات واضحة: الاقتران، تشغيل LocalDevVPN، تحديد الموقع ثم التشغيل.
 +- واجهة ثنائية اللغة، زر تشغيل/إيقاف ثابت، اختيار خريطة عادية أو قمر صناعي، وحالة اتصال مُحدّثة عند الرجوع من الإعدادات.
 +
@@ -1354,7 +1342,7 @@ index 0000000..dbb1d8a
 +1. افتح **XS Location** على الآيفون أو الآيباد، واختر اللغة من أعلى الشاشة.
 +2. اتبع الخطوة الأولى لإكمال الاقتران وفق إصدار النظام.
 +3. في الخطوة الثانية، افتح **LocalDevVPN**، وافق على إعداد VPN إن طُلب، واضغط Connect؛ ثم ارجع إلى XS Location.
-+4. ابحث عن مكان أو اضغط على الخريطة الكبيرة، ثم اضغط «تفعيل الموقع المختار» بالأسفل.
++4. بعد إكمال خطوات الإعداد، انزل للخريطة الكبيرة الموجودة آخر الصفحة، وابحث عن مكان أو اضغط عليها، ثم اضغط «تفعيل الموقع المختار» بالأسفل.
 +5. افتح خرائط Apple لتتأكد من النتيجة، واضغط «إيقاف واستعادة الموقع» عند الانتهاء.
 +
 +### Developer / LocalDevVPN
